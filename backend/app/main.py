@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import threading
 import time
 from collections import defaultdict
@@ -88,6 +89,65 @@ def load_environment_settings() -> AppSettings:
 
 setup_manager = EnvironmentSetupManager(save_environment_settings, load_environment_settings)
 
+
+def web_origins() -> list[str]:
+    """Extra browser origins for a hosted web demo.
+
+    ``STORY_GUARD_WEB_ORIGINS`` is a comma-separated list such as
+    ``https://storyguard-demo.vercel.app``.  It is empty for the desktop app,
+    so the loopback-only policy above stays unchanged there.
+    """
+    raw = os.getenv("STORY_GUARD_WEB_ORIGINS", "")
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
+def web_mode_enabled() -> bool:
+    """True when the backend serves the public web demo instead of a desktop sidecar."""
+    return os.getenv("STORY_GUARD_WEB_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def bind_host() -> str:
+    """Desktop keeps loopback; a hosted server sets ``STORY_GUARD_BIND_HOST=0.0.0.0``."""
+    return os.getenv("STORY_GUARD_BIND_HOST", "").strip() or "127.0.0.1"
+
+
+# Desktop-only surfaces that must never be reachable from a public web demo:
+# process control, local model setup, ChatGPT device login, and server-path
+# file import.  Read-only project browsing stays available.
+WEB_MODE_BLOCKED_PREFIXES = (
+    "/shutdown",
+    "/setup",
+    "/chatgpt",
+    "/documents/import",
+    "/documents/replace",
+    "/health/local-ai",
+)
+WEB_MODE_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def web_mode_allows(method: str, path: str) -> bool:
+    """Decide whether a request may pass the public web demo guard.
+
+    Reads are allowed except for desktop-only prefixes.  Writes are denied
+    unless the path matches ``STORY_GUARD_WEB_WRITE_PATHS`` (a regular
+    expression), which the demo's own rate-limited endpoints will use.
+    """
+    if method == "OPTIONS":
+        return True
+    if any(path == prefix or path.startswith(prefix + "/") or path.startswith(prefix) for prefix in WEB_MODE_BLOCKED_PREFIXES):
+        return False
+    if method in WEB_MODE_READ_METHODS:
+        return True
+    pattern = os.getenv("STORY_GUARD_WEB_WRITE_PATHS", "").strip()
+    if not pattern:
+        return False
+    try:
+        return re.fullmatch(pattern, path) is not None
+    except re.error:
+        logging.getLogger(__name__).error("STORY_GUARD_WEB_WRITE_PATHS 정규식이 잘못되었습니다: %r", pattern)
+        return False
+
+
 app = FastAPI(title="Story Guard API", version="0.1.0")
 
 # Importing several chapters in quick succession should produce one derived
@@ -140,6 +200,7 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "http://tauri.localhost",
         "tauri://localhost",
+        *web_origins(),
     ],
     # Vite may select any free localhost port during a parallel smoke test.
     # Keep the exception limited to loopback origins rather than allowing
@@ -167,6 +228,16 @@ async def require_local_api_token(request: Request, call_next):
         return await call_next(request)
 
     return JSONResponse(status_code=401, content={"detail": "로컬 API 인증 토큰이 필요합니다."})
+
+
+@app.middleware("http")
+async def public_web_demo_guard(request: Request, call_next):
+    if web_mode_enabled() and not web_mode_allows(request.method, request.url.path):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "공개 웹 데모에서는 사용할 수 없는 기능입니다. 데스크톱 앱에서 제공합니다."},
+        )
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -601,7 +672,7 @@ def main() -> None:
     start_parent_process_monitor()
     repository.mark_running_jobs_interrupted()
     port = int(os.getenv("STORY_GUARD_BACKEND_PORT", "8765"))
-    uvicorn.run("backend.app.main:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run("backend.app.main:app", host=bind_host(), port=port, reload=False)
 
 
 if __name__ == "__main__":
