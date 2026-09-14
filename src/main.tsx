@@ -4,6 +4,7 @@ import App from "./App";
 import "./styles.css";
 import "./workbench.css";
 import "./theme.css";
+import "./storyguard.css";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { initializeTheme } from "./lib/theme";
 

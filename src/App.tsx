@@ -1393,7 +1393,7 @@ export default function App() {
       <main ref={workspaceRef} className="workspace">
         <header className="workspace-header">
           <div className="title-area">
-            <h1 className="page-title">{PAGES[page][0]}</h1><p className="page-description">{PAGES[page][1]}</p>
+            <h1 className="page-title">{page === 'graph' ? '이야기 사이의 연결을 따라' : PAGES[page][0]}</h1><p className="page-description">{page === 'graph' ? '인물과 장소, 사건을 잇는 실마리에서 이야기의 빈틈을 살펴보세요.' : PAGES[page][1]}</p>
             {editingProjectTitle && selectedProject && !['welcome','projects','setup','settings'].includes(page) ? (
               <form className="project-title-editor" onSubmit={saveProjectTitle}>
                 <input
@@ -1448,7 +1448,7 @@ export default function App() {
             {!['welcome','projects','setup','settings'].includes(page) && <button type="button" onClick={() => setPage(page === "graph" ? "analysis" : "graph")}>{page === "graph" ? "새 분석" : "관계 지도"}</button>}
             {!['welcome','projects','setup','settings'].includes(page) && !projectDataBlocked && <span role={projectDataError ? "alert" : undefined}>{projectDataLoading ? '작품 데이터를 새로 확인하는 중입니다.' : notice}</span>}
             {!['welcome','projects','setup','settings'].includes(page) && !projectDataBlocked && projectDataError && <button type="button" disabled={projectDataLoading} onClick={() => void refreshProjectData(selectedProject)}>다시 시도</button>}
-            {!['welcome','projects','setup','settings'].includes(page) && !projectDataBlocked && <><strong>{filteredGraph.entities.length} nodes</strong><strong>{filteredGraph.relations.length}/{graph.relations.length} links</strong></>}
+            {!['welcome','projects','setup','settings'].includes(page) && !projectDataBlocked && <><strong>대상 {filteredGraph.entities.length}개</strong><strong>관계 {filteredGraph.relations.length}/{graph.relations.length}개</strong></>}
           </div>
         </header>
         {activeAnalysisProject && activeAnalysisProject.id !== selectedProject?.id && <aside className="background-analysis" role="status"><span><strong>{activeAnalysisProject.title}</strong> 작품을 분석 중입니다. 다른 작품은 읽을 수 있으며 새 분석은 완료 후 시작할 수 있습니다.</span><button onClick={() => {selectProject(activeAnalysisProject); setPage('analysis');}}>진행 상황 보기</button></aside>}
@@ -1493,7 +1493,7 @@ export default function App() {
           </div>
         </section>
         <section hidden={page !== 'graph' || projectDataBlocked} className="graph-page">
-        <div className="graph-search"><input aria-label="인물·아이템·설정 검색" placeholder="인물·아이템·설정 검색" value={graphSearch} onChange={e=>setGraphSearch(e.target.value)}/><span>○ 인물　▢ 아이템　□ 규칙　◇ 사건</span></div>
+        <div className="graph-search"><input type="search" aria-label="인물·아이템·설정 검색" placeholder="이름이나 설정으로 실마리 찾기" value={graphSearch} onChange={e=>setGraphSearch(e.target.value)}/><span className="graph-type-legend">{ENTITY_TYPES.map(type=><span key={type} data-entity-type={type}><i aria-hidden="true"/>{ENTITY_TYPE_LABELS[type]}</span>)}</span></div>
         <div className="range-controls" aria-label="회차 분석 범위">
           <div>
             <span className="label">표시 회차</span>
@@ -1565,6 +1565,7 @@ export default function App() {
           {ENTITY_TYPES.map((type) => (
             <button
               key={type}
+              aria-pressed={visibleTypes.has(type)}
               className={visibleTypes.has(type) ? `active entity-${type}` : ""}
               onClick={() => toggleEntityType(type)}
             >

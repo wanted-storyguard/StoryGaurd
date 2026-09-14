@@ -601,7 +601,7 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
           ? position
           : { x: (index % 6) * 220, y: Math.floor(index / 6) * 170 });
       });
-      cy=cytoscape({container:containerRef.current,minZoom:.12,maxZoom:2.5,userZoomingEnabled:true,wheelSensitivity:0.18,
+      cy=cytoscape({container:containerRef.current,minZoom:.12,maxZoom:2.5,userZoomingEnabled:true,
         layout:{name:'preset'},
         elements:[...canvasGraph.entities.map(e=>{const visual=entityVisual(e, degreeByEntityId.get(e.id) ?? 0, canvasGraph.entities.length); const danglingNode=e.name.startsWith('미확인 대상 #'); return {data:{id:`n${e.id}`,entityId:e.id,dangling:danglingNode?1:0,
           // Keep the canvas label to the entity name. Type is encoded by the
@@ -731,11 +731,11 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
   const svgMetrics = useMemo(() => {
     const values = [...positions.values()].filter(position => Number.isFinite(position.x) && Number.isFinite(position.y));
     if (!values.length) return { minX: -400, maxX: 400, minY: -240, maxY: 240, centerX: 0, centerY: 0, width: 800, height: 480 };
-    const minX = Math.min(...values.map(position => position.x)) - 150;
-    const maxX = Math.max(...values.map(position => position.x)) + 150;
-    const minY = Math.min(...values.map(position => position.y)) - 120;
-    const maxY = Math.max(...values.map(position => position.y)) + 120;
-    return { minX, maxX, minY, maxY, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2, width: Math.max(800, maxX - minX), height: Math.max(480, maxY - minY) };
+    const minX = Math.min(...values.map(position => position.x)) - 100;
+    const maxX = Math.max(...values.map(position => position.x)) + 100;
+    const minY = Math.min(...values.map(position => position.y)) - 60;
+    const maxY = Math.max(...values.map(position => position.y)) + 100;
+    return { minX, maxX, minY, maxY, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2, width: Math.max(600, maxX - minX), height: Math.max(280, maxY - minY) };
   }, [positions]);
   const svgViewBox = useMemo(() => {
     const scale = clamp(zoom / 100, 0.55, 2.8);
@@ -766,13 +766,17 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
   };
   const handlePointerDown=(event: React.PointerEvent<HTMLDivElement>)=>{
     if(event.button!==0)return;
-    event.currentTarget.setPointerCapture(event.pointerId);
     panGesture.current={startX:event.clientX,startY:event.clientY,startPan:pan,active:true,dragged:false};
   };
   const handlePointerMove=(event: React.PointerEvent<HTMLDivElement>)=>{
     const gesture=panGesture.current;if(!gesture?.active)return;
     const delta={x:event.clientX-gesture.startX,y:event.clientY-gesture.startY};
-    if(Math.hypot(delta.x,delta.y)>4)gesture.dragged=true;
+    if(Math.hypot(delta.x,delta.y)>4){
+      gesture.dragged=true;
+      // Capture an actual drag, not a simple click on a node or relation.
+      if(!event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    if(!gesture.dragged)return;
     const rect=event.currentTarget.getBoundingClientRect();
     setPan(graphPanOffset(gesture.startPan,delta,{width:rect.width,height:rect.height},svgMetrics,zoom/100));
   };
@@ -792,7 +796,7 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
     return true;
   };
   return <div className={`graph-stage relationship-stage${mapFocus?" map-focus-active":""}`}>
-    <details className="graph-health-disclosure">
+    <details className={`graph-health-disclosure ${healthLevel}`}>
       <summary>관계 점검 · {healthLevel === 'good' ? '안정' : healthLevel === 'danger' ? '주의 필요' : '확인 필요'}<span>{[
         health.isolated_entity_count && `고립 후보 ${health.isolated_entity_count}`,
         health.conflicting_pair_count && `충돌 ${health.conflicting_pair_count}`,
@@ -845,7 +849,7 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
       </div>
     </div>
     <details className="network-help"><summary>지도 읽는 법 · 관계선 범례</summary>
-    <div className="network-source">{shown.relations.some(r=>r.origin==='gpt')?'GPT 추출 포함':'로컬 추출'} · 원문으로 확인할 후보입니다. 선을 누르면 근거가 열립니다. 굵은 청록 선은 근거가 높은 주요 연결을 읽기 쉽게 표시한 백본입니다.{shown.relations.some(r=>r.type==='관계')&&' ‘유형 미분류’는 관계 의미가 분석되지 않은 연결입니다.'}{health.conflicting_pair_count>0&&' ‘충돌 후보’는 양립하기 어려운 술어가 함께 추출된 상태이며 시간 순서·예외는 원문에서 확인합니다.'}{shown.relations.length>14&&' 캔버스에는 대표 관계 라벨만 표시하며 전체 후보는 오른쪽 목록에서 확인합니다.'}</div>
+    <div className="network-source">{shown.relations.some(r=>r.origin==='gpt')?'GPT 추출 포함':'로컬 추출'} · 원문으로 확인할 후보입니다. 선을 누르면 아래에서 근거를 읽을 수 있습니다. 이름 옆의 색과 유형 문구로 대상을 구분합니다.{shown.relations.some(r=>r.type==='관계')&&' ‘유형 미분류’는 관계 의미가 분석되지 않은 연결입니다.'}{health.conflicting_pair_count>0&&' ‘충돌 후보’는 양립하기 어려운 술어가 함께 추출된 상태이며 시간 순서·예외는 원문에서 확인합니다.'}{shown.relations.length>14&&' 전체 후보는 아래 관계 목록에서 확인할 수 있습니다.'}</div>
     <div className="network-legend" aria-label="관계선 범례">
       <span><i className="legend-line confirmed"/>근거 확인</span>
       <span><i className="legend-line backbone"/>주요 연결</span>
@@ -858,21 +862,23 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
     </div>
     </details>
     <div className="network-viewport" onWheel={handleTrackpadZoom} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} aria-label="관계 지도. 드래그로 이동하고 트랙패드 핀치 또는 확대·축소 버튼으로 크기를 조절할 수 있습니다.">
-      <svg className="network-svg" role="img" aria-label="인물과 설정의 관계망" viewBox={svgViewBox} preserveAspectRatio="xMidYMid meet">
-        <defs><marker id="story-guard-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8790a0"/></marker></defs>
+      <svg className="network-svg" role="group" aria-label="인물과 설정의 관계망" viewBox={svgViewBox} preserveAspectRatio="xMidYMid meet">
+        <defs><marker id="story-guard-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--sg-edge)"/></marker></defs>
         <g className="network-svg-edges">
           {svgRelations.map(({ pairKey, members, representative: relation }) => {
             const source = positions.get(relation.source_entity_id); const target = positions.get(relation.target_entity_id);
             if (!source || !target) return null;
             const selected = members.some(member => member.id === selectedRelationId);
             const issue = issueRelationIds.has(relation.id) || members.some(member => issueRelationIds.has(member.id));
-            const color = explicitBreakPairs.has(pairKey) || conflictingPairs.has(pairKey) ? '#AD443B' : changedPairs.has(pairKey) ? '#8A5A20' : gapPairs.has(pairKey) ? '#B58A4D' : relationTone(relation.type);
+            const color = explicitBreakPairs.has(pairKey) || conflictingPairs.has(pairKey) ? 'var(--sg-danger)' : changedPairs.has(pairKey) || gapPairs.has(pairKey) ? 'var(--sg-warning)' : 'var(--sg-edge)';
             const marker = relation.type === '관계' || relation.type === '관련' ? undefined : 'url(#story-guard-arrow)';
             const dx = target.x - source.x; const dy = target.y - source.y; const length = Math.max(1, Math.hypot(dx, dy));
             const nx = -dy / length; const ny = dx / length; const curve = (((relation.id * 37) % 5) - 2) * 18;
             const cx = (source.x + target.x) / 2 + nx * curve; const cy = (source.y + target.y) / 2 + ny * curve;
-            return <g key={`svg-edge-${pairKey}`} className={selected ? 'svg-edge selected' : issue ? 'svg-edge issue' : 'svg-edge'} onClick={() => { if(consumeMapDrag())return; onSelectEntity(null); onSelectRelation?.(relation.id); }}>
-              <path d={`M ${source.x} ${source.y} Q ${cx} ${cy} ${target.x} ${target.y}`} fill="none" stroke={selected ? '#24635B' : color} strokeWidth={selected ? 5 : issue ? 3.2 : 2.2} strokeDasharray={relation.is_weak ? '8 6' : undefined} markerEnd={marker}/>
+            const selectRelation = () => { onSelectEntity(null); onSelectRelation?.(relation.id); };
+            return <g key={`svg-edge-${pairKey}`} role="button" tabIndex={0} aria-label={`${entityName(relation.source_entity_id)} → ${entityName(relation.target_entity_id)} · ${relation.display_label || relation.type}`} aria-pressed={selected} className={selected ? 'svg-edge selected' : issue ? 'svg-edge issue' : 'svg-edge'} onClick={() => { if(consumeMapDrag())return; selectRelation(); }} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectRelation();}}}>
+              <path className="edge-hit-area" d={`M ${source.x} ${source.y} Q ${cx} ${cy} ${target.x} ${target.y}`} fill="none" stroke="transparent" strokeWidth={18}/>
+              <path className="edge-line" d={`M ${source.x} ${source.y} Q ${cx} ${cy} ${target.x} ${target.y}`} fill="none" stroke={selected ? 'var(--sg-accent)' : color} strokeWidth={selected ? 2.8 : issue ? 2 : 1.4} strokeDasharray={relation.is_weak ? '8 6' : undefined} markerEnd={marker}/>
               {(relation.display_label || relation.type) && <text x={cx} y={cy - 8} textAnchor="middle" className="svg-edge-label">{members.length > 1 ? `${relation.display_label || relation.type} · ${members.length}` : (relation.display_label || relation.type)}</text>}
             </g>;
           })}
@@ -882,12 +888,16 @@ export function GraphView({ projectId, graph, visible = true, selectedEntityId, 
             const position = positions.get(entity.id); if (!position) return null;
             const degree = canvasGraph.relations.filter(relation => relation.source_entity_id === entity.id || relation.target_entity_id === entity.id).length;
             const visual = entityVisual(entity, degree, canvasGraph.entities.length); const selected = entity.id === selectedEntityId; const dangling = entity.name.startsWith('미확인 대상 #');
-            const width = entity.type === 'character' ? visual.size + 20 : visual.size + 12; const height = entity.type === 'character' ? visual.size + 20 : 70;
-            const fill = dangling ? '#FFF0EE' : visual.fill; const border = dangling ? '#AD443B' : selected ? '#24635B' : visual.border;
+            const radius = Math.max(8, Math.min(18, visual.size * .2));
             const lines = entity.name.match(/.{1,10}/g) ?? [entity.name];
-            return <g key={`svg-node-${entity.id}`} className={`svg-node ${selected ? 'selected' : ''}`} transform={`translate(${position.x} ${position.y})`} onClick={() => { if(consumeMapDrag())return; onSelectRelation?.(null); onSelectEntity(dangling ? null : entity); }}>
-              {entity.type === 'character' ? <ellipse rx={width / 2} ry={height / 2} fill={fill} fillOpacity={visual.opacity} stroke={border} strokeWidth={selected ? 4 : 2.2}/> : <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={entity.type === 'event' ? 4 : 10} fill={fill} fillOpacity={visual.opacity} stroke={border} strokeWidth={selected ? 4 : 2}/>}
-              <text textAnchor="middle" className="svg-node-label">{lines.slice(0, 2).map((line, index) => <tspan key={index} x="0" dy={index === 0 ? (lines.length > 1 ? -5 : 5) : 16}>{line}</tspan>)}</text>
+            const selectEntity = () => { onSelectRelation?.(null); onSelectEntity(dangling ? null : entity); };
+            return <g key={`svg-node-${entity.id}`} role="button" tabIndex={0} aria-label={`${TYPE_NAMES[entity.type]} · ${entity.name}`} aria-pressed={selected} data-entity-type={entity.type} className={`svg-node ${selected ? 'selected' : ''} ${dangling ? 'dangling' : ''}`} transform={`translate(${position.x} ${position.y})`} onClick={() => { if(consumeMapDrag())return; selectEntity(); }} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectEntity();}}}>
+              <title>{TYPE_NAMES[entity.type]} · {entity.name}</title>
+              <rect className="node-hit-area" x={-70} y={-26} width={140} height={100} rx={20} fill="transparent"/>
+              <circle className="node-focus-ring" r={radius+8} fill="none" stroke="currentColor" strokeWidth={5}/>
+              <circle className="node-dot" r={radius} fill="currentColor" fillOpacity={visual.opacity}/>
+              <text y={radius+25} textAnchor="middle" className="svg-node-label">{lines.slice(0, 2).map((line, index) => <tspan key={index} x="0" dy={index===0?0:21}>{line}{index===1&&lines.length>2?'…':''}</tspan>)}</text>
+              <text y={radius+25+Math.min(lines.length,2)*21} textAnchor="middle" className="svg-node-type">{TYPE_NAMES[entity.type]}</text>
             </g>;
           })}
         </g>
