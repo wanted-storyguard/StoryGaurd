@@ -10,7 +10,9 @@ const BACKEND_READY_INTERVAL_MS = 250;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 900;
 
 export function isTauriRuntime() {
-  return "__TAURI_INTERNALS__" in window;
+  // `window` is absent in Node test environments and server-side tooling;
+  // treat those, like any plain browser, as non-desktop.
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export async function ensureDesktopBackend(): Promise<string> {
@@ -91,6 +93,12 @@ async function stopDesktopBackendOnce(): Promise<void> {
   backendProcess = null;
   startPromise = null;
 
+  // Only the desktop app owns its sidecar. A browser build (public web demo
+  // or `npm run dev` against a shared backend) must never ask the server to
+  // exit; a hosted backend also refuses /shutdown in web mode.
+  if (!isTauriRuntime()) {
+    return;
+  }
   await withTimeout(api.shutdown(), BACKEND_SHUTDOWN_TIMEOUT_MS).catch(() => undefined);
   if (!child) {
     return;

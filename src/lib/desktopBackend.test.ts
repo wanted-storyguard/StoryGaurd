@@ -21,6 +21,11 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
 describe("desktop backend readiness", () => {
   afterEach(async () => {
     vi.useRealTimers();
+    // Never let cleanup reach a real backend on 127.0.0.1:8765: a developer
+    // running the suite next to a live sidecar/dev server would stop it.
+    if (!vi.isMockFunction(api.shutdown)) {
+      vi.spyOn(api, "shutdown").mockResolvedValue({ status: "stopping" });
+    }
     await stopDesktopBackend();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
