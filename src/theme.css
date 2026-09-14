@@ -1,0 +1,89 @@
+/* StoryGuard Figma v3 · 50:5 Dark / 55:82 Light. Shared UI and graph tokens. */
+:root {
+  --sg-canvas: #faf8f3;
+  --sg-surface: #f2eee7;
+  --sg-panel: #fffdf8;
+  --sg-text: #292631;
+  --sg-muted: #625d6b;
+  --sg-accent: #72509f;
+  --sg-accent-hover: #62428c;
+  --sg-on-accent: #ffffff;
+  --sg-soft: #e8e0f1;
+  --sg-line: #dcd4e2;
+  --sg-line-strong: #a69aac;
+  --sg-warning: #a54f32;
+  --sg-warning-soft: #faeadd;
+  --sg-danger: #a53f49;
+  --sg-danger-soft: #f9e6e8;
+  --sg-success: #396b54;
+  --sg-success-soft: #e8f0e8;
+  --sg-highlight: #f4dfb9;
+  --sg-edge: #8f71b9;
+  --sg-place: #747f9f;
+  --sg-organization: #96718f;
+  --sg-item: #98743f;
+  --sg-rule: #5c8380;
+  --sg-foreshadowing: #7873a1;
+  --sg-shadow-color: #292631;
+  --sg-decoration-opacity: .06;
+  --sg-font-ui: Pretendard, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sg-font-reading: "Noto Serif KR", "Noto Serif KR Latin", Batang, "AppleMyungjo", serif;
+  --sg-space-s: 8px;
+  --sg-space-m: 16px;
+  --sg-space-l: 24px;
+  --sg-radius: 12px;
+  --sg-radius-pill: 999px;
+  font-family: var(--sg-font-ui);
+  color: var(--sg-text);
+  background: var(--sg-canvas);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --sg-canvas: #24232b;
+  --sg-surface: #2c2a33;
+  --sg-panel: #302d38;
+  --sg-text: #f4efe8;
+  --sg-muted: #bab5c3;
+  --sg-accent: #bda1ee;
+  --sg-accent-hover: #cbb3f3;
+  --sg-on-accent: #211a2c;
+  --sg-soft: #44384f;
+  --sg-line: #514b5b;
+  --sg-line-strong: #81758f;
+  --sg-warning: #f0ae89;
+  --sg-warning-soft: #49372f;
+  --sg-danger: #f1a3ac;
+  --sg-danger-soft: #49313c;
+  --sg-success: #a6d0b1;
+  --sg-success-soft: #30413a;
+  --sg-highlight: #59452e;
+  --sg-edge: #ae91d6;
+  --sg-place: #bcc2de;
+  --sg-organization: #d1a7c8;
+  --sg-item: #d5bc8d;
+  --sg-rule: #a4c7c2;
+  --sg-foreshadowing: #b9b1df;
+  --sg-shadow-color: #000000;
+  --sg-decoration-opacity: .48;
+  color-scheme: dark;
+}
+
+body { background: var(--sg-canvas); color: var(--sg-text); }
+textarea, input, select { color: var(--sg-text); caret-color: var(--sg-accent); }
+input::placeholder, textarea::placeholder { color: var(--sg-muted); opacity: 1; }
+::selection { background: var(--sg-soft); color: var(--sg-text); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+.theme-picker { display: flex; align-items: center; gap: 6px; position: relative; color: var(--sg-muted); }
+.theme-picker label { display: inline-flex; align-items: center; gap: 8px; }
+.workbench .theme-picker select { min-width: 98px; background-color: transparent; border-color: transparent; border-radius: var(--sg-radius-pill); }
+.workbench .theme-picker select:hover { background-color: var(--sg-soft); }
+.theme-picker > small { position: absolute; z-index: 30; top: 100%; right: 0; width: 250px; padding: 12px; border: 1px solid var(--sg-line); background: var(--sg-panel); border-radius: var(--sg-radius); }
+.theme-picker-detailed { flex-wrap: wrap; padding: 20px 0 0; gap: 12px; }
+.theme-picker-detailed p { flex-basis: 100%; color: var(--sg-muted); font-size: 14px; margin-bottom: 0; }
+.theme-picker-detailed > small { position: static; flex-basis: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

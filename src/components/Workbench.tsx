@@ -1,4 +1,5 @@
 import { JudgmentActions } from "./JudgmentActions";
+import { ThemePicker } from "./ThemePicker";
 import { SourceText } from "./SourceText";
 import { DocumentPicker } from "./DocumentPicker";
 import { StorySettingForm } from "./StorySettingForm";
@@ -21,6 +22,7 @@ export function WorkbenchNav({page,onPage,project,projects,onProject}: {page:Pag
  return <aside className="workbench-nav"><button className="wordmark" onClick={()=>onPage('welcome')}>STORY GUARD</button>
  <label className="project-switch">현재 작품<select value={project?.id ?? ''} onChange={e=>{const p=projects.find(p=>p.id===Number(e.target.value));if(p)onProject(p);}}><option value="" disabled>작품 선택</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
  <nav aria-label="작품 메뉴">{MENU.map(([key,Icon])=><button key={key} aria-label={PAGES[key][0]} title={PAGES[key][0]} aria-current={page===key?'page':undefined} onClick={()=>onPage(key)}><Icon size={21}/>{PAGES[key][0]}</button>)}</nav>
+ <ThemePicker/>
  <nav className="nav-bottom" aria-label="앱 메뉴"><button aria-label="내 작품" title="내 작품" aria-current={page==='projects'?'page':undefined} onClick={()=>onPage('projects')}><BookOpen size={21}/>내 작품</button><button aria-label="앱 설정" title="앱 설정" aria-current={page==='settings'||page==='setup'?'page':undefined} onClick={()=>onPage('settings')}><Settings size={21}/>앱 설정</button></nav><small>원고는 이 기기에 저장됩니다.</small></aside>;
 }
 export function ProjectsPage({projects,onOpen,onCreate}: {projects:Project[];onOpen:(p:Project)=>void;onCreate:()=>void}) {
