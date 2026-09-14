@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { applyTheme, isThemePreference, readThemePreference, resolveTheme, saveThemePreference, systemThemeIsDark, SYSTEM_THEME_QUERY, THEME_STORAGE_KEY, themeStorage, type ResolvedTheme, type ThemePreference } from "../lib/theme";
+import { syncNativeTheme } from "../lib/nativeTheme";
 
 interface Appearance {
   preference: ThemePreference;
@@ -17,6 +18,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const resolved = resolveTheme(preference, systemDark);
 
   useLayoutEffect(() => { applyTheme(preference, systemDark); }, [preference, systemDark]);
+
+  useEffect(() => {
+    void syncNativeTheme(preference).catch(() => {
+      // A native failure must not prevent reading the manuscript or changing the UI theme.
+      console.warn("[storyguard-appearance] Native window theme could not be applied.");
+    });
+  }, [preference]);
 
   useEffect(() => {
     const media = window.matchMedia(SYSTEM_THEME_QUERY);
