@@ -4,6 +4,27 @@ Story Guard는 웹소설, 장편 소설, 드라마 시나리오처럼 설정과 
 
 해커톤 저장소: <https://github.com/wanted-storyguard/StoryGaurd>
 
+## 제출 형태 · 공개 웹 데모 (2026-09-14 결정)
+
+원티드 AI 챔피언십 FAQ(9/10)는 검증되지 않은 설치 파일(exe·dmg) 다운로드를 허용하지 않고, 데스크톱 앱은 스토어 링크 또는 **핵심 기능을 체험할 수 있는 웹 데모 URL**로 제출하도록 안내한다. 팀은 제출물을 웹 데모로 정했고, 데스크톱 앱은 제출 이후에 이어간다.
+
+- 같은 코드베이스를 Tauri 없이 서버에 올린다. 프론트는 정적 빌드, 백엔드는 FastAPI를 **웹 모드**로 실행한다.
+- 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 종료·로컬 모델 설치·ChatGPT 로그인·서버 경로 import 같은 데스크톱 전용 API를 403으로 막고, 샘플 작품을 읽기 전용으로 제공한다. 쓰기는 `STORY_GUARD_WEB_WRITE_PATHS` 정규식에 맞는 경로만 허용한다.
+- 샘플 작품의 청킹·임베딩·GPT 분석은 로컬에서 미리 돌리고, 그 결과 데이터 폴더(SQLite·Chroma)를 서버의 `STORY_GUARD_DATA_DIR`로 올린다. 서버에는 임베딩 모델을 두지 않는다.
+- 라이브 "이 장면 검토"는 서버가 OpenAI API 키로 GPT를 호출하고 사용량·예산을 제한한다. 이 연결 클래스와 제한 계층은 아직 구현 전이다.
+
+웹 모드 로컬 확인:
+
+```powershell
+$env:STORY_GUARD_WEB_MODE = "1"
+$env:STORY_GUARD_WEB_ORIGINS = "http://localhost:5173"
+$env:STORY_GUARD_DATA_DIR = "C:\storyguard-demo-data"
+.\.venv\Scripts\python.exe -m backend.app.main
+# 다른 창에서: npm run dev  →  http://localhost:5173
+```
+
+프로덕션 빌드는 `VITE_STORY_GUARD_API=https://<백엔드 주소> npm run build`로 만든다. 환경변수 전체와 배포 원칙은 [docs/web-demo-server.md](docs/web-demo-server.md)에 있다.
+
 ## 빠른 시작
 
 ```bash
