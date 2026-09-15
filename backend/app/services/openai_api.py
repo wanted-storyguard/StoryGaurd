@@ -21,7 +21,11 @@ from backend.app.services.gpt_errors import GptRequestError, error_for_code
 DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 SYSTEM_INSTRUCTIONS = ('Analyze only the supplied fictional text. Do not use tools, execute commands, '
                        'or inspect files. Follow the response format the user requests.')
-REASONING_MODEL = re.compile(r'^(gpt-5|o[1-9])')
+REASONING_MODEL = re.compile(r'^(gpt-[5-9]|o[1-9])')
+# Dated snapshots (gpt-5.4-2026-03-05) duplicate their alias; hide them so the
+# list stays short and the newest alias is easy to find.
+DATED_SNAPSHOT = re.compile(r'-\d{4}-\d{2}-\d{2}$')
+MODEL_VERSION = re.compile(r'^gpt-(\d+)(?:\.(\d+))?')
 EXCLUDED_MODEL_MARKERS = ('embedding', 'realtime', 'audio', 'tts', 'transcribe', 'image', 'moderation',
                           'search', 'instruct', 'whisper', 'dall-e', 'computer-use', 'codex')
 EFFORTS = ('low', 'medium', 'high')
@@ -37,14 +41,17 @@ class _NoopTransport:
         return None
 
 
-def _model_rank(model_id: str) -> tuple[int, str]:
-    if model_id.startswith('gpt-5'):
-        return (0, model_id)
+def _model_rank(model_id: str) -> tuple[int, int, str]:
+    """Newest GPT generation first, then o-series, then older GPT aliases."""
+    version = MODEL_VERSION.match(model_id)
+    if version and int(version.group(1)) >= 5:
+        number = int(version.group(1)) * 100 + int(version.group(2) or 0)
+        return (0, -number, model_id)
     if REASONING_MODEL.match(model_id):
-        return (1, model_id)
+        return (1, 0, model_id)
     if model_id.startswith('gpt-4.1'):
-        return (2, model_id)
-    return (3, model_id)
+        return (2, 0, model_id)
+    return (3, 0, model_id)
 
 
 class OpenAiApiConnection:
@@ -106,8 +113,9 @@ class OpenAiApiConnection:
         else:
             chosen = sorted((value for value in ids
                              if (value.startswith('gpt-') or REASONING_MODEL.match(value))
+                             and not DATED_SNAPSHOT.search(value)
                              and not any(marker in value for marker in EXCLUDED_MODEL_MARKERS)),
-                            key=_model_rank)[:30]
+                            key=_model_rank)[:60]
         models = [self._describe(value) for value in chosen]
         with self._lock:
             self._models_cache = list(models)

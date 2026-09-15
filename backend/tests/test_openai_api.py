@@ -9,6 +9,7 @@ from backend.app.services.openai_api import OpenAiApiConnection
 
 MODELS = {'data': [
     {'id': 'gpt-5.6-luna'}, {'id': 'gpt-5.4-mini'}, {'id': 'gpt-4.1'}, {'id': 'o3'},
+    {'id': 'gpt-6-astra'}, {'id': 'gpt-5.4-mini-2026-03-17'},
     {'id': 'text-embedding-3-small'}, {'id': 'gpt-4o-realtime-preview'}, {'id': 'whisper-1'},
 ]}
 
@@ -49,13 +50,17 @@ def test_models_filter_reasoning_efforts_and_cache(monkeypatch):
     connection = make_connection(handler, monkeypatch=monkeypatch)
     models = connection.models()
     ids = [row['id'] for row in models]
-    assert ids[0].startswith('gpt-5')
+    # Newest generation first; dated snapshots and non-chat models are hidden.
+    assert ids[:3] == ['gpt-6-astra', 'gpt-5.6-luna', 'gpt-5.4-mini']
+    assert 'gpt-5.4-mini-2026-03-17' not in ids
     assert 'text-embedding-3-small' not in ids
     assert 'gpt-4o-realtime-preview' not in ids
     assert 'whisper-1' not in ids
     luna = next(row for row in models if row['id'] == 'gpt-5.6-luna')
     assert luna['default_effort'] == 'medium'
     assert [option['value'] for option in luna['efforts']] == ['low', 'medium', 'high']
+    astra = next(row for row in models if row['id'] == 'gpt-6-astra')
+    assert astra['default_effort'] == 'medium'
     plain = next(row for row in models if row['id'] == 'gpt-4.1')
     assert plain['efforts'] == [] and plain['default_effort'] is None
     connection.models()
