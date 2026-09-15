@@ -11,7 +11,8 @@ Story Guard는 웹소설, 장편 소설, 드라마 시나리오처럼 설정과 
 - 같은 코드베이스를 Tauri 없이 서버에 올린다. 프론트는 정적 빌드, 백엔드는 FastAPI를 **웹 모드**로 실행한다.
 - 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 종료·로컬 모델 설치·ChatGPT 로그인·서버 경로 import 같은 데스크톱 전용 API를 403으로 막고, 샘플 작품을 읽기 전용으로 제공한다. 쓰기는 `STORY_GUARD_WEB_WRITE_PATHS` 정규식에 맞는 경로만 허용한다.
 - 샘플 작품의 청킹·임베딩·GPT 분석은 로컬에서 미리 돌리고, 그 결과 데이터 폴더(SQLite·Chroma)를 서버의 `STORY_GUARD_DATA_DIR`로 올린다. 서버에는 임베딩 모델을 두지 않는다.
-- 라이브 "이 장면 검토"는 서버가 OpenAI API 키로 GPT를 호출하고 사용량·예산을 제한한다. 이 연결 클래스와 제한 계층은 아직 구현 전이다.
+- GPT 호출은 서버가 `OPENAI_API_KEY`로 직접 한다. 키가 있으면 자동으로 API 키 연결이 선택되고, 방문자에게 로그인을 요구하지 않는다. 공개 서버의 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리며 접속당·하루 횟수 한도가 걸린다.
+- 이 브랜치(`web-demo-lcs`)에서는 Tauri 셸, sidecar 빌드 스크립트, Windows 릴리스 워크플로, 로컬 LLM 설치 화면을 제거했다. 데스크톱 앱은 `main`에서 이어간다.
 
 웹 모드 로컬 확인:
 
@@ -32,16 +33,21 @@ git clone https://github.com/wanted-storyguard/StoryGaurd.git
 cd StoryGaurd
 npm install
 python3 -m venv .venv
-. .venv/bin/activate
+. .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r backend/requirements.txt
 npm test -- --run
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q   # Windows: .venv\Scripts\python.exe -m pytest -q
 npm run build
 ```
 
-자세한 개발·패키징 절차는 아래의 `개발 환경 실행`과 `데스크톱 앱 빌드`를 따릅니다. 모델 바이너리와 개인 원고는 저장소에 커밋하지 않습니다.
+로컬 실행은 두 창이 필요합니다. `OPENAI_API_KEY`를 넣으면 GPT 분석까지 동작합니다.
 
-원고와 분석 데이터는 사용자 컴퓨터 안에 저장됩니다. 사용자가 선택해 연결한 GPT 계정으로 분석할 때만 필요한 원문 구간이 해당 제공자에 전송되며, 팀 공용 API 키를 사용하지 않습니다.
+```bash
+OPENAI_API_KEY=sk-... npm run backend     # Windows: $env:OPENAI_API_KEY="sk-..."; npm run backend:win
+npm run dev                               # http://localhost:5173
+```
+
+모델 바이너리·개인 원고·API 키는 저장소에 커밋하지 않습니다. GPT 분석을 실행할 때 동의한 원문 구간과 검색 근거만 OpenAI로 전송됩니다.
 
 ## 주요 기능
 
@@ -54,19 +60,19 @@ npm run build
 - 중간 회차 공백, 충돌 술어, 끊긴 끝점을 원문 근거와 함께 표시
 - 설정 충돌, 시간선 오류, 미회수 떡밥 후보 리포트
 - 이슈 상태 관리: 열림, 확정, 무시, 보류
-- 앱 관리 로컬 LLM 설치와 분석
+- 서버 OpenAI API 키로 GPT 검토 (모델·추론 강도 선택, 회차 범위 지정, 실패 구간 재시도)
 - LangChain 기반 chunking/RAG 색인
 - LangGraph 스타일 분석 파이프라인
 - SQLite와 Chroma를 이용한 로컬 저장
 
 ## 기술 스택
 
-- 데스크톱: Tauri v2
-- 프론트엔드: React, TypeScript, Vite, Cytoscape
-- 백엔드: Python, FastAPI
+- 프론트엔드: React, TypeScript, Vite, Cytoscape (정적 빌드로 배포)
+- 백엔드: Python, FastAPI (웹 모드로 서버 실행)
 - 데이터 저장: SQLite, Chroma
-- 로컬 AI: llama.cpp, GGUF 로컬 모델, LangChain, LangGraph
-- 패키징: PyInstaller sidecar, Tauri bundle
+- GPT: OpenAI API (chat completions, 서버 키) · 데스크톱 브랜치는 ChatGPT 장치 로그인
+- 검색·파이프라인: LangChain 청킹/RAG 색인, LangGraph 스타일 분석 파이프라인
+- 임베딩: 로컬 사전 계산용 Qwen3 Embedding 0.6B 또는 EmbeddingGemma 300M (서버에서는 실행하지 않음)
 
 ## 동작 구조
 
@@ -95,29 +101,22 @@ flowchart LR
 
 ## 보안과 프라이버시
 
-- 원고 본문, chunk, 엔티티, 관계, 이슈는 로컬 앱 데이터 디렉터리에 저장됩니다.
-- 로컬 분석은 앱 데이터 디렉터리에 설치된 로컬 GGUF 모델로 동작합니다.
-- 사용자가 GPT 계정을 연결한 경우에는 선택한 GPT 모델로 분석할 수 있습니다. 이 경로는 원문 전송과 사용량이 발생하므로 실행 전에 안내합니다.
-- 로컬 생성 모델이 없으면 로컬 분석만 비활성화하고, GPT 연결이 준비된 경우에는 GPT 분석을 사용할 수 있습니다.
-- 데스크톱 앱은 FastAPI sidecar를 `127.0.0.1`에만 바인딩합니다.
-- 데스크톱 실행 시 Tauri가 로컬 API 토큰을 앱 데이터 디렉터리에 저장하고, sidecar API 요청에 토큰을 붙입니다.
-- `/health`를 제외한 API는 토큰이 설정된 경우 토큰 없이 접근할 수 없고, 앱 시작 준비 확인은 인증된 `/health/ready`로 수행합니다.
-- 기본 모델 설치는 공개 모델 파일 다운로드만 수행하며, 원고 본문은 외부로 전송하지 않습니다.
+- 원고 본문, chunk, 엔티티, 관계, 이슈는 서버의 `STORY_GUARD_DATA_DIR`에 저장됩니다. 공개 데모는 미리 준비한 샘플 작품만 담습니다.
+- GPT 분석은 서버가 `OPENAI_API_KEY`로 호출합니다. 키는 서버 환경변수에만 두고 브라우저로 내려보내지 않습니다. 실행 전에 원문 전송 동의를 받습니다.
+- 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 종료·로컬 모델 설치·ChatGPT 로그인·서버 경로 import를 403으로 막고, 샘플 데이터를 읽기 전용으로 제공합니다.
+- 공개 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리고, 접속당·하루 횟수 한도(`STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT`, `STORY_GUARD_WEB_GPT_RUNS_PER_DAY`)와 동시 요청 수(`STORY_GUARD_GPT_CONCURRENCY`)로 비용을 제한합니다. OpenAI 프로젝트의 지출 한도를 마지막 안전장치로 둡니다.
+- `STORY_GUARD_API_TOKEN`을 설정하면 `/health`를 제외한 API가 토큰을 요구합니다. 공개 데모에서는 비워 둡니다.
 
-주의: 개발 모드에서는 별도 backend 서버를 직접 띄울 수 있으므로, 공개 네트워크 인터페이스에 backend를 바인딩하지 마세요.
+주의: 로컬 개발에서는 백엔드가 `127.0.0.1`에만 바인딩됩니다. 서버에서만 `STORY_GUARD_BIND_HOST=0.0.0.0`을 씁니다.
 
 ## 요구 사항
 
-- macOS
 - Node.js 20 이상 권장
-- Python 3.11
-- Rust/Cargo
-- 기본 로컬 생성 모델: `qwen2.5-1.5b-instruct-q4_k_m.gguf`
-- 로컬 임베딩 모델 선택지: Qwen3 Embedding 0.6B 또는 EmbeddingGemma 300M
-- 기본 모델 출처: `Qwen/Qwen2.5-1.5B-Instruct-GGUF`
-- 런타임: `llama-cpp-python`
+- Python 3.11 이상 (Windows 3.12 확인)
+- OpenAI API 키 (`OPENAI_API_KEY`) · GPT 분석에만 필요
+- 로컬 사전 계산용 임베딩 모델: Qwen3 Embedding 0.6B(`llama-cpp-python` 필요) 또는 EmbeddingGemma 300M(`requirements-gemma.txt`, Hugging Face 라이선스 동의 필요)
 
-앱의 `LLM 설치` 버튼은 기본 GGUF 생성 모델을 앱 데이터 디렉터리의 `models/` 폴더에 내려받습니다. 임베딩 모델도 환경 설정에서 별도로 준비하며, 다른 GGUF 생성 모델을 사용할 때는 같은 폴더에 파일을 넣고 생성 모델 선택에서 고릅니다.
+`llama-cpp-python`은 서버·웹 개발에는 필요 없으며 로컬에서 Qwen 임베딩으로 사전 계산할 때만 설치합니다. Windows에서 빌드하려면 cmake와 MSVC가 있어야 합니다.
 
 ## 개발 환경 실행
 
@@ -130,10 +129,15 @@ python3 -m venv .venv
 pip install -r backend/requirements.txt
 ```
 
-백엔드 실행:
+백엔드 실행 (macOS/Linux, Windows):
 
 ```bash
-npm run backend
+OPENAI_API_KEY=sk-... npm run backend
+```
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+npm run backend:win
 ```
 
 프론트엔드 실행:
@@ -142,62 +146,15 @@ npm run backend
 npm run dev
 ```
 
-Tauri 개발 실행:
+키 없이 띄우면 앱 설정 화면의 AI 연결 패널이 "OPENAI_API_KEY가 설정되어 있지 않습니다"를 보여주고, 저장·조회 기능만 동작합니다.
 
-```bash
-npm run tauri -- dev
-```
+## 서버 배포
 
-## 데스크톱 앱 빌드
+공개 서버 실행 방법과 환경변수 전체는 [docs/web-demo-server.md](docs/web-demo-server.md)에 있습니다. 요약하면 프론트는 `VITE_STORY_GUARD_API`를 넣어 빌드한 `dist/`를 정적 호스팅에 올리고, 백엔드는 `STORY_GUARD_WEB_MODE=1`, `STORY_GUARD_WEB_ORIGINS`, `STORY_GUARD_BIND_HOST=0.0.0.0`, `OPENAI_API_KEY`를 주고 실행합니다.
 
-Python sidecar 빌드:
+## 데스크톱 앱
 
-```bash
-./scripts/build-backend-sidecar.sh
-```
-
-Windows PowerShell에서는 다음 명령으로 동일한 sidecar를 만듭니다.
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.\scripts\build-backend-sidecar.ps1
-```
-
-Windows 빌드는 `src-tauri\binaries\story-guard-backend-x86_64-pc-windows-msvc.exe`를 생성한 뒤 Tauri 빌드를 실행합니다. 실제 Windows 설치·실행은 Windows 장비에서 별도로 확인해야 합니다.
-
-저장소의 `Windows release candidate` GitHub Actions를 수동 실행하거나 `v*` 태그를 push하면 Windows runner에서 sidecar 빌드, 프론트·백엔드 테스트, NSIS 설치 파일 생성을 자동으로 수행합니다. Windows 장비에서 생성된 파일의 크기와 SHA-256은 다음 명령으로 확인합니다.
-
-```powershell
-.\scripts\verify-windows-artifacts.ps1
-```
-
-Tauri 앱 빌드:
-
-```bash
-npm run tauri -- build
-```
-
-macOS 앱 번들은 다음 위치에 생성됩니다.
-
-```text
-src-tauri/target/release/bundle/macos/Story Guard.app
-```
-
-기본 Tauri DMG 생성은 GUI 장식 단계가 필요한 환경에서 실패할 수 있습니다. 비GUI 환경에서는 다음 재현 스크립트를 사용합니다.
-
-```bash
-./scripts/build-macos-dmg.sh
-```
-
-설치 후보 DMG는 다음 위치에 생성됩니다.
-
-```text
-output/releases/Story Guard_0.1.0_arm64.dmg
-```
-
-파일명·SHA-256·서명 상태는 `output/releases/release.json`에서 확인합니다.
-
-DMG를 열고 `Story Guard.app`을 `Applications`로 드래그해 설치합니다. 현재 배포 후보는 Apple Silicon arm64용이며, Finder 창의 아이콘 위치 장식은 비GUI 빌드에서 생략됩니다.
+Tauri 셸과 sidecar·DMG·Windows 릴리스 스크립트는 `main` 브랜치에 있습니다. 이 브랜치는 웹 데모 제출용이라 해당 파일을 제거했습니다.
 
 ## 테스트
 
@@ -219,12 +176,6 @@ npm test -- --run
 
 ```bash
 npm run build
-```
-
-Rust/Tauri 확인:
-
-```bash
-cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
 보안 audit:
