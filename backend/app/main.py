@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
 import logging
 import os
@@ -18,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.app.chatgpt_routes import router as chatgpt_router, connection as chatgpt_connection
-from backend.app.config import chroma_path, database_path, models_path
+from backend.app.config import app_data_dir, chroma_path, database_path, models_path
 from backend.app.database import Database
 from backend.app.models import (
     AnalysisJob,
@@ -28,6 +29,8 @@ from backend.app.models import (
     DocumentDeleteResult,
     DocumentImport,
     DocumentReplace,
+    DocumentUpload,
+    DocumentUploadReplace,
     EnvironmentSetupProgress,
     EnvironmentSetupRequest,
     EnvironmentStatus,
@@ -57,7 +60,7 @@ from backend.app.services.local_ai import (
     LocalAiRuntime,
 )
 from backend.app.services.local_llm import LocalLlmExtractor
-from backend.app.services.parser import UnsupportedDocumentFormat, read_document, split_chunks
+from backend.app.services.parser import SUPPORTED_FORMATS, UnsupportedDocumentFormat, read_document, split_chunks
 from backend.app.services.rag import RagService
 
 
@@ -432,22 +435,25 @@ def delete_project(project_id: int) -> ProjectDeleteResult:
     return ProjectDeleteResult(project_id=deleted_project_id)
 
 
-@app.post("/documents/import", response_model=StoryDocument)
-async def import_document(payload: DocumentImport) -> StoryDocument:
-    path = Path(payload.path)
+UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _import_document_from_path(project_id: int, path: Path) -> StoryDocument:
     try:
         content, file_format, content_hash = read_document(path)
     except UnsupportedDocumentFormat as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.") from error
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=400, detail="UTF-8 텍스트 파일만 읽을 수 있습니다. 메모장에서 'UTF-8'로 다시 저장해 주세요.") from error
 
-    existing_documents = repository.list_documents(payload.project_id)
+    existing_documents = repository.list_documents(project_id)
     next_chapter_index = (
         max((document.chapter_index for document in existing_documents), default=-1) + 1
     )
     document = repository.add_document(
-        project_id=payload.project_id,
+        project_id=project_id,
         path=path,
         title=path.stem,
         file_format=file_format,
@@ -458,22 +464,21 @@ async def import_document(payload: DocumentImport) -> StoryDocument:
     )
     settings = get_settings()
     request_rag = RagService(chroma_path(), embedding_model=settings.embedding_model, repository=repository)
-    rag_chunks = request_rag.split_text(content, document.id, payload.project_id)
+    rag_chunks = request_rag.split_text(content, document.id, project_id)
     chunks = [chunk.text for chunk in rag_chunks] or split_chunks(content)
-    repository.replace_chunks(payload.project_id, document.id, chunks)
+    repository.replace_chunks(project_id, document.id, chunks)
     # Keep the last published graph visible while the new chapter is indexed
     # and reviewed. The next successful analysis transaction replaces derived
     # results atomically; importing a draft must not make the workspace look
     # empty or discard the author's previous decisions.
     if chunks:
-        schedule_project_index(payload.project_id, settings.embedding_model)
+        schedule_project_index(project_id, settings.embedding_model)
     return document
 
 
-@app.put("/documents/{document_id}", response_model=StoryDocument)
-async def replace_document(document_id: int, payload: DocumentReplace) -> StoryDocument:
+def _replace_document_from_path(document_id: int, path: Path) -> StoryDocument:
     try:
-        content, file_format, content_hash = read_document(Path(payload.path))
+        content, file_format, content_hash = read_document(path)
         if not content.strip():
             raise HTTPException(status_code=400, detail="빈 원고로 교체할 수 없습니다.")
         rag = RagService(chroma_path(), embedding_model=get_settings().embedding_model, repository=repository)
@@ -487,14 +492,68 @@ async def replace_document(document_id: int, payload: DocumentReplace) -> StoryD
             raise HTTPException(status_code=404, detail="원고를 찾을 수 없습니다.")
         project_id = int(row["project_id"])
         chunks = [chunk.text for chunk in rag.split_text(content, document_id, project_id)]
-        document = repository.replace_document(document_id, Path(payload.path), file_format, content_hash, content, chunks)
+        document = repository.replace_document(document_id, path, file_format, content_hash, content, chunks)
     except (FileNotFoundError, KeyError) as error:
         raise HTTPException(status_code=404, detail="원고 또는 파일을 찾을 수 없습니다.") from error
     except UnsupportedDocumentFormat as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=400, detail="UTF-8 텍스트 파일만 읽을 수 있습니다. 메모장에서 'UTF-8'로 다시 저장해 주세요.") from error
     schedule_project_index(document.project_id, get_settings().embedding_model)
     # Retrieval synchronizes the derived index before serving any results.
     return document
+
+
+def _store_upload(project_id: int, filename: str, content_base64: str) -> Path:
+    """Write browser-uploaded bytes under the data folder and return the path.
+
+    The browser cannot hand the server a path, so the file is kept next to the
+    database; the rest of the import flow is identical to a path import.
+    """
+    name = Path(filename.replace("\\", "/")).name.strip()
+    if not name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="파일 이름을 확인해 주세요.")
+    if Path(name).suffix.lower() not in SUPPORTED_FORMATS:
+        raise HTTPException(status_code=400, detail="txt, md, docx 파일만 올릴 수 있습니다.")
+    try:
+        data = base64.b64decode(content_base64, validate=True)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="파일 내용을 해석하지 못했습니다.") from error
+    if not data:
+        raise HTTPException(status_code=400, detail="빈 파일은 올릴 수 없습니다.")
+    if len(data) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="파일이 너무 큽니다 (최대 5MB).")
+    target_dir = app_data_dir() / "uploads" / str(project_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / name
+    target.write_bytes(data)
+    return target
+
+
+@app.post("/documents/import", response_model=StoryDocument)
+async def import_document(payload: DocumentImport) -> StoryDocument:
+    return _import_document_from_path(payload.project_id, Path(payload.path))
+
+
+@app.post("/documents/upload", response_model=StoryDocument)
+async def upload_document(payload: DocumentUpload) -> StoryDocument:
+    path = _store_upload(payload.project_id, payload.filename, payload.content_base64)
+    return _import_document_from_path(payload.project_id, path)
+
+
+@app.put("/documents/{document_id}", response_model=StoryDocument)
+async def replace_document(document_id: int, payload: DocumentReplace) -> StoryDocument:
+    return _replace_document_from_path(document_id, Path(payload.path))
+
+
+@app.put("/documents/{document_id}/upload", response_model=StoryDocument)
+async def replace_document_upload(document_id: int, payload: DocumentUploadReplace) -> StoryDocument:
+    with repository.database.connect() as connection:
+        row = connection.execute("SELECT project_id FROM documents WHERE id=?", (document_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="원고를 찾을 수 없습니다.")
+    path = _store_upload(int(row["project_id"]), payload.filename, payload.content_base64)
+    return _replace_document_from_path(document_id, path)
 
 
 @app.get("/projects/{project_id}/review-history")

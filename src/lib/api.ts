@@ -118,6 +118,17 @@ export const api = {
     }),
   replaceDocument: (documentId: number, path: string) =>
     request<StoryDocument>(`/documents/${documentId}`, {method: 'PUT', body: JSON.stringify({path})}),
+  // Browser uploads send the file bytes (base64) instead of a server path.
+  uploadDocument: (projectId: number, filename: string, contentBase64: string) =>
+    request<StoryDocument>("/documents/upload", {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, filename, content_base64: contentBase64 }),
+    }),
+  replaceDocumentUpload: (documentId: number, filename: string, contentBase64: string) =>
+    request<StoryDocument>(`/documents/${documentId}/upload`, {
+      method: "PUT",
+      body: JSON.stringify({ filename, content_base64: contentBase64 }),
+    }),
   reviewHistory: (projectId: number) => request<import('./types').ReviewHistory[]>(`/projects/${projectId}/review-history`),
   deleteDocument: (documentId: number) =>
     request<DocumentDeleteResult>(`/documents/${documentId}`, {

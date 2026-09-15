@@ -58,6 +58,19 @@ class DocumentReplace(BaseModel):
     path: str
 
 
+class DocumentUpload(BaseModel):
+    """A manuscript sent from the browser: bytes, not a server path."""
+
+    project_id: int
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1)
+
+
+class DocumentUploadReplace(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1)
+
+
 class DocumentDeleteResult(BaseModel):
     project_id: int
 

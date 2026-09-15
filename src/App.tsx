@@ -31,6 +31,7 @@ import { ChatGptPanel } from "./components/ChatGptPanel";
 import { StartupLoader, type StartupStatus } from "./components/StartupLoader";
 import { friendlyStartupError } from "./lib/startupError";
 import { AnalysisProgressPanel } from "./components/AnalysisProgressPanel";
+import { sortImportPaths } from "./lib/importPaths";
 import { startupRoute } from "./lib/startupRoute";
 
 const EMPTY_GRAPH: GraphPayload = {
@@ -285,12 +286,12 @@ export default function App() {
   const [editingProjectTitle, setEditingProjectTitle] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
-  const [documentPathModalOpen, setDocumentPathModalOpen] = useState(false);
   const [sourceRequest, setSourceRequest] = useState<{documentId:number;quote?:string}>();
   const [replacementDocument, setReplacementDocument] = useState<StoryDocument | null>(null);
   const [reviewHistory, setReviewHistory] = useState<import("./lib/types").ReviewHistory[]>([]);
-  const [documentPathDraft, setDocumentPathDraft] = useState("");
-  const [documentPathError, setDocumentPathError] = useState("");
+  // Browser file pickers: one for adding episodes (multiple), one for replacing a single episode.
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const [documents, setDocuments] = useState<StoryDocument[]>([]);
   const [storySettings, setStorySettings] = useState<StorySetting[]>([]);
   const [foreshadowingStatuses, setForeshadowingStatuses] = useState<ForeshadowingStatus[]>([]);
@@ -349,7 +350,7 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    const modalOpen = projectModalOpen || documentPathModalOpen;
+    const modalOpen = projectModalOpen;
     if (!modalOpen) {
       if (modalWasOpenRef.current) {
         modalWasOpenRef.current = false;
@@ -366,8 +367,6 @@ export default function App() {
       if (event.key === "Escape") {
         event.preventDefault();
         setProjectModalOpen(false);
-        setDocumentPathModalOpen(false);
-        setReplacementDocument(null);
         return;
       }
       if (event.key !== "Tab") return;
@@ -385,7 +384,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [projectModalOpen, documentPathModalOpen]);
+  }, [projectModalOpen]);
 
   const openIssues = useMemo(
     () => graph.issues.filter((issue) => issue.status !== "ignored"),
@@ -544,9 +543,7 @@ export default function App() {
     setHealthOnly(false);
     setAnalysisJob(null);
     setLastAnalysisRequest(null);
-    setDocumentPathModalOpen(false);
     setReplacementDocument(null);
-    setDocumentPathError("");
     setNotice("");
     projectDataErrorRef.current = false;
     setProjectDataError(false);
@@ -1012,25 +1009,21 @@ export default function App() {
     }
   }
 
-  async function importDocumentPath(path: string, replacement = replacementDocument, refreshAfter = true) {
+  async function importDocumentVia(
+    request: (projectId: number) => Promise<StoryDocument>,
+    replacement: StoryDocument | null,
+    refreshAfter = true,
+  ) {
     if (!selectedProject || workspaceBusy || (replacement && replacement.project_id !== selectedProject.id)) {
-      return false;
-    }
-    const filePath = path.trim();
-    if (!filePath) {
-      setDocumentPathError("원고 파일 경로를 입력해 주세요.");
       return false;
     }
     const project = selectedProject;
     const write = mutationScope.current.begin(project.id, 'documents');
     if (!write) return false;
-    setDocumentPathError("");
     setNotice(replacement ? "수정 원고를 저장하고 있습니다." : "원고를 가져오고 있습니다.");
     setLoading(true);
     try {
-      const document = replacement
-        ? await api.replaceDocument(replacement.id, filePath)
-        : await api.importDocument(project.id, filePath);
+      const document = await request(project.id);
       const changed = !replacement || replacement.content_hash !== document.content_hash;
       // A return visit may have loaded the old draft while the write was still
       // pending. Re-read it, but never give an old project ownership of a new view.
@@ -1056,7 +1049,6 @@ export default function App() {
     } catch (error) {
       if (write.isCurrent()) {
         const message = error instanceof Error ? error.message : "원고 저장 응답을 확인하지 못했습니다. 원고 목록을 확인한 뒤 다시 시도해 주세요.";
-        setDocumentPathError(message);
         setNotice(message);
       }
       return false;
@@ -1071,28 +1063,44 @@ export default function App() {
       return;
     }
     setReplacementDocument(null);
-    setDocumentPathError("");
-    setDocumentPathDraft("");
-    modalTriggerRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
-    setDocumentPathModalOpen(true);
+    importInputRef.current?.click();
   }
 
   async function replaceDocument(document: StoryDocument) {
     if (!selectedProject || workspaceBusy || document.project_id !== selectedProject.id) return;
-    setDocumentPathError("");
     setReplacementDocument(document);
-    setDocumentPathDraft("");
-    modalTriggerRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
-    setDocumentPathModalOpen(true);
+    replaceInputRef.current?.click();
   }
 
-  async function submitDocumentPath(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const imported = await importDocumentPath(documentPathDraft);
-    if (imported) {
-      setDocumentPathModalOpen(false);
-      setDocumentPathDraft("");
-      setReplacementDocument(null);
+  async function importChosenFiles(fileList: FileList | null, replacement: StoryDocument | null) {
+    const project = selectedProject;
+    if (!project || !fileList?.length) return;
+    // Sort like a multi-file desktop import: by the episode number in each name.
+    const byName = new Map(Array.from(fileList).map((file) => [file.name, file] as const));
+    const files = sortImportPaths(Array.from(byName.keys())).map((name) => byName.get(name)!);
+    if (replacement) {
+      const file = files[0];
+      const encoded = await fileToBase64(file);
+      const done = await importDocumentVia(() => api.replaceDocumentUpload(replacement.id, file.name, encoded), replacement);
+      if (done) setReplacementDocument(null);
+      return;
+    }
+    let imported = 0;
+    let failed = 0;
+    const failedNames: string[] = [];
+    for (const file of files) {
+      const encoded = await fileToBase64(file);
+      if (await importDocumentVia((projectId) => api.uploadDocument(projectId, file.name, encoded), null, false)) imported += 1;
+      else { failed += 1; failedNames.push(file.name); }
+    }
+    if (imported > 0 && dataOwnerRef.current === project.id) {
+      await refreshProjectData(project, chapterRangeRef.current);
+      await refreshProjects(project.id);
+    }
+    if (imported || failed) {
+      setNotice(failed
+        ? `원고 ${imported}편을 가져왔고 ${failed}편은 실패했습니다 (${failedNames.slice(0, 3).join(', ')}${failed > 3 ? ' 외' : ''}). 실패한 파일을 확인한 뒤 다시 시도해 주세요.`
+        : `원고 ${imported}편을 가져왔습니다. 분석 화면에서 전체 회차를 확인하세요.`);
     }
   }
 
@@ -1444,47 +1452,43 @@ export default function App() {
           </form>
         </div>
       )}
-      {documentPathModalOpen && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={() => setDocumentPathModalOpen(false)}
-        >
-          <form
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="document-path-heading"
-            onSubmit={submitDocumentPath}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div>
-              <span className="label">{replacementDocument ? "원고 교체" : "원고 추가"}</span>
-              <h2 id="document-path-heading">{replacementDocument ? `${replacementDocument.chapter_index + 1}화 수정본 선택` : "파일 경로 입력"}</h2>
-              {replacementDocument && <p>회차와 제목을 유지합니다. 내용이 바뀌면 이전 검토와 원문 근거를 이력에 보관하며, 같은 내용이면 기존 분석을 유지합니다.</p>}
-            </div>
-            <label htmlFor="document-path">원고 파일 경로</label>
-            <input
-              id="document-path"
-              autoFocus
-              value={documentPathDraft}
-              disabled={workspaceBusy}
-              aria-invalid={Boolean(documentPathError)}
-              aria-describedby={documentPathError ? "document-path-error" : undefined}
-              placeholder="/Users/name/Documents/story.md"
-              onChange={(event) => setDocumentPathDraft(event.target.value)}
-            />
-            {documentPathError && <p id="document-path-error" className="form-error" role="alert">{documentPathError}</p>}
-            {loading && <p role="status">원고를 저장하고 있습니다. 이 창을 닫아도 저장은 계속됩니다.</p>}
-            <div className="modal-actions">
-              <button type="button" onClick={() => setDocumentPathModalOpen(false)}>
-                {loading ? "닫기" : "취소"}
-              </button>
-              <button type="submit" disabled={workspaceBusy}>{loading ? "저장 중…" : replacementDocument ? "수정본으로 교체" : "추가"}</button>
-            </div>
-          </form>
-        </div>
-      )}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".txt,.md,.docx"
+        multiple
+        hidden
+        aria-label="원고 파일 선택"
+        onChange={(event) => {
+          const files = event.target.files;
+          event.target.value = "";
+          void importChosenFiles(files, null);
+        }}
+      />
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept=".txt,.md,.docx"
+        hidden
+        aria-label="수정본 파일 선택"
+        onChange={(event) => {
+          const files = event.target.files;
+          event.target.value = "";
+          void importChosenFiles(files, replacementDocument);
+        }}
+      />
     </div>
   );
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("파일을 읽지 못했습니다."));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.includes(",") ? result.slice(result.indexOf(",") + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
