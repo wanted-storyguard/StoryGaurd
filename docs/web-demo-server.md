@@ -46,6 +46,45 @@ $env:STORY_GUARD_WEB_ALLOW_GPT_ANALYZE = "1"
 - 돌리기 전에 시연할 규칙을 `POST /projects/{id}/settings`에 `certainty: confirmed`로 등록한다. 등록된 확정 설정은 모든 GPT 검토 구간에 자동으로 들어가므로, 1화 규칙과 7화 행동을 비교할 근거가 빠지지 않는다.
 - 서버에는 임베딩 모델이 없다. 라이브 검토는 미리 찾아둔 근거 + 사용자가 고친 장면을 GPT에 보내는 방식으로 설계한다.
 
+## 테스트 방법
+
+### A. API 키로 GPT 분석 테스트 (임베딩 모델 없어도 됨)
+
+임베딩 모델이 없으면 검색 색인 단계는 건너뛰고 SQLite 청크에 대한 BM25 검색으로 근거를 찾는다. 분석 자체는 그대로 돌아가므로 키만 있으면 이 PC에서 바로 확인할 수 있다. 단, 회차를 넘나드는 근거 회수는 임베딩이 있는 환경보다 약하다.
+
+1. 백엔드를 개발 모드(웹 모드 아님)로 띄운다. `OPENAI_API_KEY=sk-... npm run backend` (Windows는 `npm run backend:win`).
+2. 스크립트로 연결만 먼저 확인한다. 실제 요청은 샘플 1회다.
+
+   ```bash
+   python -m scripts.api_smoke --model gpt-5.6-luna --effort low
+   ```
+
+   모델 목록에 원하는 모델이 없으면 `STORY_GUARD_OPENAI_MODELS`로 고정한다. 추론 강도를 지원하지 않는 모델은 `--effort`를 빼고 실행한다.
+3. 작품을 만들고 원고를 넣은 뒤 짧은 범위로 분석한다. 검토 구간 수만큼 요청이 나가므로 `--yes`가 필요하다.
+
+   ```bash
+   python -m scripts.api_smoke --model gpt-5.6-luna --effort low --analyze --project 1 --start 0 --end 1 --yes
+   ```
+
+   엔티티·관계·검토 후보 수, 실패 구간, 첫 이슈의 근거 인용이 출력된다. 같은 내용을 UI에서 하려면 앱 설정 → AI 연결 패널에서 "샘플로 연결 검증" → 분석 화면에서 회차 범위를 잡고 "이 작품 GPT 분석"이다.
+4. 확인할 것: 응답이 JSON으로 파싱되는지(실패하면 `invalid_request`나 "JSON 객체를 찾지 못했습니다"로 보임), 추론 강도 파라미터를 모델이 받아주는지, 한 구간 응답 시간이 60초 안에 드는지. 여기서 걸리면 `backend/app/services/openai_api.py`의 요청 본문(`reasoning_effort`, `response_format`)만 손보면 된다.
+
+### B. 임베딩 테스트
+
+- **Mac(권장).** 이미 Qwen3-Embedding·EmbeddingGemma 실측이 끝난 환경이다. 사전 계산 데이터는 여기서 만든다.
+- **이 PC(Windows).** Qwen GGUF 경로는 `llama-cpp-python` 컴파일(cmake·MSVC)이 필요해 막혀 있다. EmbeddingGemma 경로는 가능하다.
+  1. Hugging Face에서 `google/embeddinggemma-300m` 이용 조건에 동의하고 `hf auth login`(또는 `HF_TOKEN`)으로 로그인한다.
+  2. 개발 모드 백엔드에 준비 요청을 보낸다. 이 브랜치의 웹 UI에는 설치 화면이 없으므로 API로 호출한다. 첫 실행은 `gemma-runtime` 가상환경 생성, torch·sentence-transformers 설치, 모델 약 1.2GB 다운로드로 수 분이 걸린다.
+
+     ```bash
+     curl -X POST http://127.0.0.1:8765/setup/run -H "Content-Type: application/json" \
+       -d '{"install_runtime":false,"prepare_embedding_model":true,"prepare_generation_model":false,"embedding_model":"embeddinggemma-300m","generation_model":"qwen2.5-1.5b-instruct-q4_k_m.gguf"}'
+     curl http://127.0.0.1:8765/setup/progress     # running=false, error=null 이면 완료
+     curl http://127.0.0.1:8765/setup/status       # embedding_model_ready=true 확인
+     ```
+  3. 원고를 등록한 뒤 GPT 분석을 한 번 돌리면 `gpt_index` 단계에서 실제 임베딩이 계산된다(진행률 5~30%). 이후 `/projects/{id}/analysis/plan`이 임베딩 예상 시간을 함께 돌려준다.
+  4. 검색 품질 비교는 `scripts/validate_long_retrieval.py`, `scripts/embedding_benchmark/validate_hybrid.py`를 쓰되 `output/validation/` 데이터셋이 필요하다(저장소에 없음, Mac에 있음).
+
 ## GPT 연결 구조
 
 - `backend/app/services/gpt_connection.py`가 환경에 따라 연결을 고른다. `OPENAI_API_KEY`가 있으면 `openai_api.OpenAiApiConnection`(chat completions), 없으면 데스크톱용 `chatgpt.ChatGptConnection`(Codex 장치 로그인).

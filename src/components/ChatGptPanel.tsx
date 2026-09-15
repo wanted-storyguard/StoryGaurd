@@ -227,7 +227,7 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
         <label><input type="checkbox" checked={reuseResults} disabled={busy || analyzing} onChange={e => setReuseResults(e.target.checked)} /> 동일한 원문·검색 근거·모델·추론 강도의 검증된 결과 재사용 (추가 GPT 요청 절약)</label>
         <button disabled={busy || analyzing || !model || !hasDocuments || !manuscriptConsent || !onAnalyze} onClick={() => act(async () => { await onAnalyze?.(model, selectedEffort || undefined, !reuseResults, analysisRange); })}>{analyzing ? "작품 분석 중…" : "이 작품 GPT 분석"}</button>
       </div>}
-      {showAnalysis && !compact && !apiKeyMode && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 내 계정의 사용 한도를 사용하는 데 동의합니다.</label>
+      {showAnalysis && !compact && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 {usageOwner}을 사용하는 데 동의합니다.</label>
       <button disabled={busy || !model || !consent} onClick={() => act(async () => { setResult(""); setResult((await api.chatGptCheck(model, selectedEffort || undefined)).text); })}>{busy ? "확인 중…" : "샘플로 연결 검증"}</button></>}
     </div>}
     {(error || status?.error) && <p role="alert">{error || status?.error}</p>}
