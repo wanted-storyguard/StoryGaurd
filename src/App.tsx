@@ -1072,11 +1072,11 @@ export default function App() {
     replaceInputRef.current?.click();
   }
 
-  async function importChosenFiles(fileList: FileList | null, replacement: StoryDocument | null) {
+  async function importChosenFiles(chosen: File[], replacement: StoryDocument | null) {
     const project = selectedProject;
-    if (!project || !fileList?.length) return;
+    if (!project || !chosen.length) return;
     // Sort like a multi-file desktop import: by the episode number in each name.
-    const byName = new Map(Array.from(fileList).map((file) => [file.name, file] as const));
+    const byName = new Map(chosen.map((file) => [file.name, file] as const));
     const files = sortImportPaths(Array.from(byName.keys())).map((name) => byName.get(name)!);
     if (replacement) {
       const file = files[0];
@@ -1460,7 +1460,9 @@ export default function App() {
         hidden
         aria-label="원고 파일 선택"
         onChange={(event) => {
-          const files = event.target.files;
+          // `input.files` is a live list: copy it before clearing the input,
+          // otherwise the reset empties the selection we are about to upload.
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
           void importChosenFiles(files, null);
         }}
@@ -1472,7 +1474,7 @@ export default function App() {
         hidden
         aria-label="수정본 파일 선택"
         onChange={(event) => {
-          const files = event.target.files;
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
           void importChosenFiles(files, replacementDocument);
         }}
