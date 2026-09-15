@@ -2,12 +2,10 @@ import { ProjectMutationScope } from "./lib/projectMutationScope";
 import { DocumentPicker } from "./components/DocumentPicker";
 import { WorkbenchNav, ProjectsPage, ManuscriptsPage, ReviewPage, GraphDetails, PAGES, type Page } from "./components/Workbench";
 import { lazy, Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import { api } from "./lib/api";
 import { analysisJobAfterError, analysisRetryRequest, belongsToNewAnalysis } from "./lib/analysisProgress";
-import { ensureDesktopBackend, isTauriRuntime } from "./lib/desktopBackend";
+import { ensureBackend } from "./lib/desktopBackend";
 import { clearGraphPositions } from "./lib/graphLayoutStorage";
 import { isMembershipRelation } from "./lib/graphMembership";
 import { isDanglingRelation, isRelationshipHealthIssue, temporalIssuePairs } from "./lib/relationshipHealth";
@@ -16,14 +14,11 @@ import type {
   EntityNode,
   EntityRelationshipDetail,
   EntityType,
-  EnvironmentSetupProgress,
-  EnvironmentStatus,
   EvidenceChunk,
   GraphPayload,
   IssueStatus,
   AnalysisJob,
   AppSettings,
-  LocalAiHealth,
   Project,
   RelationEdge,
   StoryDocument,
@@ -32,13 +27,10 @@ import type {
 } from "./lib/types";
 const GraphView = lazy(() => import("./components/GraphView").then(({ GraphView: view }) => ({ default: view })));
 import { Inspector } from "./components/Inspector";
-import { Sidebar } from "./components/Sidebar";
 import { ChatGptPanel } from "./components/ChatGptPanel";
-import { SetupPanel } from "./components/SetupPanel";
 import { StartupLoader, type StartupStatus } from "./components/StartupLoader";
 import { friendlyStartupError } from "./lib/startupError";
 import { AnalysisProgressPanel } from "./components/AnalysisProgressPanel";
-import { sortImportPaths } from "./lib/importPaths";
 import { startupRoute } from "./lib/startupRoute";
 
 const EMPTY_GRAPH: GraphPayload = {
@@ -325,10 +317,7 @@ export default function App() {
     () => new Set(ENTITY_TYPES),
   );
   const [evidenceByIssueId, setEvidenceByIssueId] = useState<Record<number, EvidenceChunk[]>>({});
-  const [localAi, setLocalAi] = useState<LocalAiHealth | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [setupStatus, setSetupStatus] = useState<EnvironmentStatus | null>(null);
-  const [setupProgress, setSetupProgress] = useState<EnvironmentSetupProgress | null>(null);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
   const [lastAnalysisRequest, setLastAnalysisRequest] = useState<{ model?: string; effort?: string; force?: boolean; range?: ChapterRange } | null>(null);
   const retryRequest = analysisJob ? analysisRetryRequest(analysisJob, lastAnalysisRequest) : null;
@@ -534,20 +523,6 @@ export default function App() {
       .slice(0, 12);
   }, [filteredGraph, selectedEntity]);
 
-  const refreshLocalAi = useCallback(async () => {
-    try {
-      setLocalAi(await api.localAiHealth());
-    } catch (error) {
-      setLocalAi({
-        ok: false,
-        runtime: "story-guard-local",
-        message: error instanceof Error ? error.message : "Local AI 상태 확인 실패",
-        models: [],
-        model_dir: "",
-      });
-    }
-  }, []);
-
   const prepareProjectData = useCallback((projectId: number | null) => {
     if (dataOwnerRef.current === projectId) return;
     dataOwnerRef.current = projectId;
@@ -705,13 +680,6 @@ export default function App() {
     setSettings(await api.settings());
   }, []);
 
-  const refreshSetup = useCallback(async () => {
-    const [status, progress] = await Promise.all([api.setupStatus(), api.setupProgress()]);
-    setSetupStatus(status);
-    setSetupProgress(progress);
-    return status;
-  }, []);
-
   const updateStartup = useCallback((message: string, detail: string, progress: number) => {
     if (!startupActiveRef.current) {
       return;
@@ -756,25 +724,25 @@ export default function App() {
     const showStartup = startupActiveRef.current;
     try {
       if (showStartup) {
-        updateStartup("백엔드 시작 중", "로컬 API와 앱 데이터 폴더를 확인하고 있습니다.", 18);
+        updateStartup("백엔드 연결 중", "서버 API에 연결하고 있습니다.", 18);
       }
-      const backendMessage = await ensureDesktopBackend();
+      const backendMessage = await ensureBackend();
       setNotice(backendMessage);
       if (showStartup) {
-        updateStartup("Local AI 확인 중", "로컬 LLM 런타임과 모델 파일을 확인하고 있습니다.", 52);
+        updateStartup("설정 확인 중", "서버의 분석 설정을 확인하고 있습니다.", 52);
       }
-      // Project data is required to open the workspace, but Local AI/setup
-      // checks are advisory. A slow or unavailable model runtime must not
-      // hold the entire app on the startup screen or hide existing projects.
-      // Attach rejection handlers immediately so every request settles.
-      const [projectsResult, localAiResult, settingsResult, setupResult] = await Promise.allSettled([
-        refreshProjects(), refreshLocalAi(), refreshSettings(), refreshSetup(),
+      // Project data is required to open the workspace, but the settings
+      // check is advisory: it must not hold the whole app on the startup
+      // screen or hide existing projects. Attach rejection handlers
+      // immediately so every request settles.
+      const [projectsResult, settingsResult] = await Promise.allSettled([
+        refreshProjects(), refreshSettings(),
       ]);
       if (projectsResult.status === "rejected") {
         throw projectsResult.reason;
       }
       const nextSelectedProject = projectsResult.value;
-      const optionalFailures = [localAiResult, settingsResult, setupResult]
+      const optionalFailures = [settingsResult]
         .filter((result): result is PromiseRejectedResult => result.status === "rejected");
       if (optionalFailures.length) {
         setNotice("작품은 열었지만 일부 준비 상태를 확인하지 못했습니다. 앱 설정에서 다시 확인할 수 있습니다.");
@@ -805,11 +773,9 @@ export default function App() {
   }, [
     completeStartup,
     failStartup,
-    refreshLocalAi,
     refreshProjectData,
     refreshProjects,
     refreshSettings,
-    refreshSetup,
     updateStartup,
   ]);
 
@@ -820,35 +786,6 @@ export default function App() {
     initialRefreshCompletedRef.current = true;
     void refreshAll();
   }, [refreshAll]);
-
-  // Finder에서 원고를 작업 영역으로 직접 끌어다 놓으면 여러 파일을
-  // 순서대로 가져옵니다. 분석 중이거나 작품이 없을 때는 무시합니다.
-  useEffect(() => {
-    if (!isTauriRuntime() || !selectedProject) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebviewWindow().onDragDropEvent(async (event) => {
-      if (disposed || event.payload.type !== "drop" || workspaceBusy) return;
-      const paths = sortImportPaths(event.payload.paths.filter((path) => /\.(txt|md|docx)$/i.test(path)));
-      if (!paths.length) return;
-      let imported = 0;
-      let failed = 0;
-      const failedNames: string[] = [];
-      for (const path of paths) {
-        if (disposed || workspaceBusy) break;
-        if (await importDocumentPath(path, null)) imported += 1;
-        else { failed += 1; failedNames.push(path.split(/[\\/]/).pop() || path); }
-      }
-      if (!disposed && imported) {
-        setNotice(failed
-          ? `원고 ${imported}편을 가져왔고 ${failed}편은 실패했습니다 (${failedNames.slice(0, 3).join(', ')}${failed > 3 ? ' 외' : ''}). 실패한 파일을 확인한 뒤 다시 시도해 주세요.`
-          : `원고 ${imported}편을 가져왔습니다. 분석 화면에서 전체 회차를 확인하세요.`);
-      } else if (!disposed && failed) {
-        setNotice(`원고 ${failed}편을 가져오지 못했습니다 (${failedNames.slice(0, 3).join(', ')}${failed > 3 ? ' 외' : ''}). 파일 형식과 경로를 확인한 뒤 다시 시도해 주세요.`);
-      }
-    }).then((dispose) => { unlisten = dispose; });
-    return () => { disposed = true; unlisten?.(); };
-  }, [selectedProject?.id, workspaceBusy]);
 
   useEffect(() => {
     if (!selectedProject) {
@@ -870,21 +807,6 @@ export default function App() {
       setSelectedEntity(null);
     }
   }, [filteredGraph.entities, selectedEntity]);
-
-  useEffect(() => {
-    if (!setupProgress?.running) {
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      void api.setupProgress().then(async (progress) => {
-        setSetupProgress(progress);
-        if (!progress.running) {
-          await Promise.all([refreshSetup(), refreshLocalAi(), refreshSettings()]);
-        }
-      });
-    }, 2000);
-    return () => window.clearInterval(intervalId);
-  }, [refreshLocalAi, refreshSettings, refreshSetup, setupProgress?.running]);
 
   useEffect(() => {
     if (!selectedProject && !activeAnalysisProject) return;
@@ -1150,10 +1072,6 @@ export default function App() {
     }
     setReplacementDocument(null);
     setDocumentPathError("");
-    if (isTauriRuntime()) {
-      await chooseDocumentFile(null);
-      return;
-    }
     setDocumentPathDraft("");
     modalTriggerRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
     setDocumentPathModalOpen(true);
@@ -1162,50 +1080,10 @@ export default function App() {
   async function replaceDocument(document: StoryDocument) {
     if (!selectedProject || workspaceBusy || document.project_id !== selectedProject.id) return;
     setDocumentPathError("");
-    if (isTauriRuntime()) {
-      await chooseDocumentFile(document);
-      return;
-    }
     setReplacementDocument(document);
     setDocumentPathDraft("");
     modalTriggerRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
     setDocumentPathModalOpen(true);
-  }
-
-  async function chooseDocumentFile(replacement: StoryDocument | null) {
-    if (!selectedProject) return;
-    const picker = mutationScope.current.begin(selectedProject.id, 'document-picker');
-    if (!picker) return;
-    try {
-      // 여러 회차를 한 번에 선택할 수 있게 해 초기 업로드 비용을 줄입니다.
-      // 수정본 교체는 대상 문서가 하나이므로 단일 선택을 유지합니다.
-      const selected = await open({multiple: replacement ? false : true, filters: [{name: "원고", extensions: ["txt", "md", "docx"]}]});
-      if (!picker.isCurrent() || selected === null) return;
-      const paths = sortImportPaths((Array.isArray(selected) ? selected : [selected]).filter((path): path is string => typeof path === "string"));
-      if (replacement) {
-        if (paths[0]) await importDocumentPath(paths[0], replacement);
-        return;
-      }
-      let imported = 0;
-      let failed = 0;
-      const failedNames: string[] = [];
-      for (const path of paths) {
-        if (!picker.isCurrent()) break;
-        if (await importDocumentPath(path, null, false)) imported += 1;
-        else { failed += 1; failedNames.push(path.split(/[\\/]/).pop() || path); }
-      }
-      if (picker.isCurrent() && imported > 0 && dataOwnerRef.current === selectedProject.id) {
-        await refreshProjectData(selectedProject, chapterRangeRef.current);
-        await refreshProjects(selectedProject.id);
-      }
-      if (picker.isCurrent() && (imported || failed)) {
-        setNotice(failed
-          ? `원고 ${imported}편을 가져왔고 ${failed}편은 실패했습니다 (${failedNames.slice(0, 3).join(', ')}${failed > 3 ? ' 외' : ''}). 실패한 파일을 확인한 뒤 다시 시도해 주세요.`
-          : `원고 ${imported}편을 가져왔습니다. 분석 화면에서 전체 회차를 확인하세요.`);
-      }
-    } catch (error) {
-      if (picker.isCurrent()) setNotice(error instanceof Error ? error.message : "파일 선택 창을 열지 못했습니다.");
-    } finally { picker.finish(); }
   }
 
   async function submitDocumentPath(event: FormEvent<HTMLFormElement>) {
@@ -1337,46 +1215,6 @@ export default function App() {
     } finally { write.finish(); }
   }
 
-  async function updateGenerationModel(model: string) {
-    try {
-      const updated = await api.updateSettings({
-        ...settings,
-        generation_model: model,
-      });
-      setSettings(updated);
-      setNotice(`생성 모델 저장: ${updated.generation_model}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "설정 저장 실패");
-    }
-  }
-
-  async function startEnvironmentSetup(embeddingModel: string) {
-    try {
-      setNotice("로컬 AI 모델을 준비합니다.");
-      const progress = await api.runSetup({
-        install_runtime: false,
-        prepare_embedding_model: true,
-        prepare_generation_model: false,
-        embedding_model: embeddingModel,
-        generation_model:
-          settings.generation_model ||
-          setupStatus?.generation_model ||
-          "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-      });
-      setSetupProgress(progress);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "환경 설정 시작 실패");
-    }
-  }
-
-  async function refreshEnvironmentSetup() {
-    try {
-      await Promise.all([refreshSetup(), refreshLocalAi(), refreshSettings()]);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "환경 상태 확인 실패");
-    }
-  }
-
   function retryStartup() {
     startupActiveRef.current = true;
     setStartupStatus(INITIAL_STARTUP_STATUS);
@@ -1467,19 +1305,11 @@ export default function App() {
         <section hidden={page !== 'foreshadowing' || projectDataBlocked} className="page-content"><div className="surface"><h2>추출된 떡밥 후보</h2><p className="muted">AI는 등장 단서를 후보로 제시합니다. 마지막 언급 이후 공백만으로 미회수라고 단정하지 않고, 작가가 상태를 결정합니다.</p>{graph.entities.filter(e=>e.type==='foreshadowing').map(e=>{const current=foreshadowingStatuses.find(item=>item.entity_id===e.id)?.status??'unreviewed';return <div className="source-card foreshadowing-card" key={e.id}><div><h3>{e.name}</h3><span className={`setting-certainty ${current}`}>{{unreviewed:'검토 전',in_progress:'진행 중',resolved:'회수 확인',intentional:'의도적 미회수'}[current]}</span></div><p>{e.summary}</p><p className="muted">등장 회차 {e.document_ids.map(id=>documents.find(d=>d.id===id)?.chapter_index).filter((v):v is number=>v!==undefined).sort((a,b)=>a-b).map(ch=>`${ch+1}화`).join(' · ')||'확인 중'}</p><div className="foreshadowing-actions"><select aria-label={`${e.name} 상태`} value={current} onChange={event=>void updateForeshadowingStatus(e.id,event.target.value as ForeshadowingStatus['status'])}><option value="unreviewed">검토 전</option><option value="in_progress">진행 중</option><option value="resolved">회수 확인</option><option value="intentional">의도적 미회수</option></select><button onClick={()=>{setSelectedEntity(e);setPage('graph');}}>관계 지도에서 확인</button></div></div>})}{!graph.entities.some(e=>e.type==='foreshadowing')&&<div className="blank-state"><p>{graph.entities.length ? '현재 분석 결과에 떡밥 유형 후보가 없습니다. 원문에서 단서를 찾으려면 다시 분석해 보세요.' : '원고를 가져온 뒤 분석을 시작하면 떡밥 후보가 여기에 표시됩니다.'}</p><button className="primary" onClick={()=>setPage(graph.entities.length ? 'analysis' : 'manuscripts')}>{graph.entities.length ? '분석 설정으로 이동' : '원고 가져오기'}</button></div>}</div></section>
         <section hidden={!['analysis','settings','setup'].includes(page) || (page === 'analysis' && projectDataBlocked)} className="analysis-layout">
           <div className="surface analysis-target">
-            {page === 'analysis' ? <><h2>분석 대상</h2><div className="soft-card"><strong>{selectedProject?.title ?? '작품을 선택하세요'}</strong><p>전체 원고 · {documents.length}편 · {formatManuscriptChars(documents)}</p><p className="muted">원고 전체를 로컬에서 색인한 뒤, 선택한 회차 범위를 여러 구간으로 묶어 순서대로 검토합니다. 첫 실행은 검색 색인 시간이 필요하고, 이미 검증된 구간은 재시도 때 재사용합니다.</p></div><p className="muted analysis-list-hint">회차를 누르면 원고가 열립니다. 분석 회차 범위는 오른쪽 GPT 분석 패널에서 선택합니다.</p><DocumentPicker key={selectedProject?.id ?? 'analysis-no-project'} documents={documents} onSelect={documentId=>{setSourceRequest({documentId});setPage('manuscripts');}}/><button onClick={()=>setPage('manuscripts')}>{documents.length ? '원고·설정 관리' : '원고 가져오기'}</button><hr/><h3>이번 분석에서 확인할 내용</h3><p>설정 충돌 후보와 인물·아이템·규칙의 관계를 원문 근거와 함께 정리합니다.</p></> : page === 'setup' ? <><h2>준비 순서</h2><div className="soft-card"><strong>1. 내 GPT 연결</strong><p>작품 분석에 사용할 계정을 연결합니다.</p><strong>2. 원고 검색 모델 준비</strong><p>Qwen 또는 EmbeddingGemma 중 하나를 선택합니다.</p><strong>3. 내 작품으로 이동</strong><p>준비가 끝나면 원고를 가져오고 분석을 시작합니다.</p></div><button className="primary" onClick={()=>setPage('projects')}>내 작품으로 이동</button></> : <><h2>저장·분석 환경</h2><div className="soft-card"><strong>원고는 이 기기에 저장됩니다.</strong><p>GPT 분석을 실행할 때 동의한 원문과 검색 근거만 외부 GPT로 전송됩니다.</p></div><button onClick={()=>setPage('manuscripts')}>원고·설정 열기</button></>}
+            {page === 'analysis' ? <><h2>분석 대상</h2><div className="soft-card"><strong>{selectedProject?.title ?? '작품을 선택하세요'}</strong><p>전체 원고 · {documents.length}편 · {formatManuscriptChars(documents)}</p><p className="muted">원고 전체를 로컬에서 색인한 뒤, 선택한 회차 범위를 여러 구간으로 묶어 순서대로 검토합니다. 첫 실행은 검색 색인 시간이 필요하고, 이미 검증된 구간은 재시도 때 재사용합니다.</p></div><p className="muted analysis-list-hint">회차를 누르면 원고가 열립니다. 분석 회차 범위는 오른쪽 GPT 분석 패널에서 선택합니다.</p><DocumentPicker key={selectedProject?.id ?? 'analysis-no-project'} documents={documents} onSelect={documentId=>{setSourceRequest({documentId});setPage('manuscripts');}}/><button onClick={()=>setPage('manuscripts')}>{documents.length ? '원고·설정 관리' : '원고 가져오기'}</button><hr/><h3>이번 분석에서 확인할 내용</h3><p>설정 충돌 후보와 인물·아이템·규칙의 관계를 원문 근거와 함께 정리합니다.</p></> : page === 'setup' ? <><h2>준비 순서</h2><div className="soft-card"><strong>1. GPT 연결 확인</strong><p>서버에 설정된 OpenAI API 키로 연결됩니다. 오른쪽에서 상태와 모델을 확인합니다.</p><strong>2. 예시 작품 열기</strong><p>미리 준비된 작품의 원고·설정·분석 결과를 살펴봅니다.</p><strong>3. 장면 검토</strong><p>선택한 범위를 GPT로 검토하고 원문 근거와 함께 확인합니다.</p></div><button className="primary" onClick={()=>setPage('projects')}>내 작품으로 이동</button></> : <><h2>저장·분석 환경</h2><div className="soft-card"><strong>원고는 서버에 저장됩니다.</strong><p>GPT 분석을 실행할 때 동의한 원문과 검색 근거만 OpenAI로 전송됩니다.</p></div><button onClick={()=>setPage('manuscripts')}>원고·설정 열기</button></>}
           </div>
-          {page === 'analysis' && <div className="surface analysis-readiness"><strong>원고 검색 준비</strong><p className="muted">{setupStatus?.embedding_model ?? 'Qwen3-Embedding-0.6B-Q8_0.gguf'} · {setupStatus?.embedding_model_ready ? '검색 모델 준비 완료' : '검색 모델 준비 필요'}</p><p className="muted">원고를 수정하면 검색 자료와 분석 결과가 최신 상태가 아니게 됩니다. 다시 분석하면 현재 원문 기준으로 갱신됩니다.</p></div>}
+          {page === 'analysis' && <div className="surface analysis-readiness"><strong>원고 검색 준비</strong><p className="muted">검색 색인 · {settings.embedding_model}</p><p className="muted">원고를 수정하면 검색 자료와 분석 결과가 최신 상태가 아니게 됩니다. 다시 분석하면 현재 원문 기준으로 갱신됩니다.</p></div>}
           <div className="analysis-options">
         <ChatGptPanel projectId={selectedProject?.id} projectTitle={selectedProject?.title} hasDocuments={documents.length > 0} documentCount={documents.length} manuscriptChars={documents.reduce((total, document) => total + document.content.length, 0)} documentCharCounts={documents.map(document => document.content.length)} chapters={documents.map(document => ({ chapterIndex: document.chapter_index, title: document.title }))} analysisRange={analysisRange} onAnalysisRangeChange={setAnalysisRange} analyzing={workspaceBusy} onAnalyze={analyze} showAnalysis={page === 'analysis'} compact={page === 'analysis' || page === 'settings'} />
-        {(page === "setup" || page === "settings") && (
-          <SetupPanel
-            status={setupStatus}
-            progress={setupProgress}
-            onStart={startEnvironmentSetup}
-            onRefresh={refreshEnvironmentSetup}
-          />
-        )}
         {page === 'analysis' && analysisJob?.project_id === selectedProject?.id && analysisJob && analysisJob.status !== "idle" && (
           <AnalysisProgressPanel
             job={analysisJob}
@@ -1487,7 +1317,6 @@ export default function App() {
             onCancel={workspaceBusy ? () => void cancelAnalysis() : undefined}
           />
         )}
-          {page === 'settings' && <details className="surface" open><summary>고급 · 로컬 생성 모델</summary><p>개인 GPT 분석에는 로컬 생성 모델이 필요하지 않습니다. 로컬 모델을 사용하는 경우에만 선택하세요.</p><select aria-label="로컬 생성 모델" value={settings.generation_model} onChange={e=>updateGenerationModel(e.target.value)}>{[...new Set([settings.generation_model,...(localAi?.models??[])])].map(m=><option key={m}>{m}</option>)}</select></details>}
           </div>
         </section>
         <section hidden={page !== 'graph' || projectDataBlocked} className="graph-page">

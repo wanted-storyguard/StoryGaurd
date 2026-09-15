@@ -7,13 +7,9 @@ import type {
   AppSettings,
   ContinuityIssue,
   DocumentDeleteResult,
-  EnvironmentSetupProgress,
-  EnvironmentSetupRequest,
-  EnvironmentStatus,
   EvidenceChunk,
   GraphPayload,
   IssueStatus,
-  LocalAiHealth,
   Project,
   ProjectDeleteResult,
   StoryDocument,
@@ -94,21 +90,12 @@ export const api = {
   }),
   health: () => request<{ status: string }>("/health"),
   ready: () => request<{ status: string }>("/health/ready", undefined, { attempts: 1, timeoutMs: 2_000 }),
-  shutdown: () => request<{ status: string }>("/shutdown", { method: "POST" }),
   settings: () => request<AppSettings>("/settings"),
   updateSettings: (settings: AppSettings) =>
     request<AppSettings>("/settings", {
       method: "PUT",
       body: JSON.stringify(settings),
     }),
-  setupStatus: () => request<EnvironmentStatus>("/setup/status"),
-  setupProgress: () => request<EnvironmentSetupProgress>("/setup/progress"),
-  runSetup: (payload: EnvironmentSetupRequest) =>
-    request<EnvironmentSetupProgress>("/setup/run", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  localAiHealth: () => request<LocalAiHealth>("/health/local-ai"),
   listProjects: () => request<Project[]>("/projects"),
   createProject: (title: string) =>
     request<Project>("/projects", {

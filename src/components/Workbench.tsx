@@ -11,10 +11,10 @@ import { relationPairKey, relationTypesConflict, timelinePairsByStatus } from '.
 import { groupRelationshipEdges } from '../lib/relationshipGrouping';
 export type Page = 'welcome' | 'setup' | 'projects' | 'manuscripts' | 'analysis' | 'review' | 'graph' | 'foreshadowing' | 'settings';
 export const PAGES: Record<Page, [string,string]> = {
- welcome:['Story Guard','이야기의 흐름을 지키는, 작가의 두 번째 시선'], setup:['AI 연결·준비','내 계정으로 분석하고, 원고는 내 기기에 보관하세요.'],
+ welcome:['Story Guard','이야기의 흐름을 지키는, 작가의 두 번째 시선'], setup:['AI 연결·준비','서버의 GPT 연결을 확인하고 예시 작품을 살펴보세요.'],
  projects:['내 작품','이야기를 이어서 살펴보세요.'], manuscripts:['원고·설정','가져온 원고와 작품의 설정을 확인하세요.'], analysis:['분석','분석할 작품과 모델을 확인하세요.'],
  review:['검토 결과','AI가 제안한 검토 후보입니다. 원문을 읽고 직접 판단해 주세요.'], graph:['관계 지도','작품 속 인물, 아이템, 규칙, 사건의 관계를 한눈에 확인하세요.'],
- foreshadowing:['떡밥 후보','현재는 AI가 찾은 단서 후보만 보여줍니다.'], settings:['앱 설정','AI 연결과 로컬 환경을 관리하세요.'],
+ foreshadowing:['떡밥 후보','현재는 AI가 찾은 단서 후보만 보여줍니다.'], settings:['앱 설정','GPT 연결 상태와 분석 설정을 확인하세요.'],
 };
 const MENU = [['manuscripts',FileText],['analysis',ScanLine],['review',BookOpen],['graph',Network],['foreshadowing',Bookmark]] as const;
 export function WorkbenchNav({page,onPage,project,projects,onProject}: {page:Page;onPage:(page:Page)=>void;project:Project|null;projects:Project[];onProject:(p:Project)=>void}) {

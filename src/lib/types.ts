@@ -282,6 +282,8 @@ export interface ChatGptStatus {
   verification_url: string | null;
   plan: string | null;
   error: string | null;
+  /** "api_key" when the server connects with its own OpenAI key; absent or "chatgpt" for the desktop device login. */
+  method?: "chatgpt" | "api_key";
 }
 export interface ChatGptModel {
   id: string;

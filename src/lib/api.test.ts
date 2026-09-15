@@ -54,24 +54,6 @@ describe("api client", () => {
     );
   });
 
-  it("shuts down the local backend with POST", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "stopping" })));
-    vi.stubGlobal("fetch", fetchMock);
-    setApiToken("desktop-token");
-
-    await expect(api.shutdown()).resolves.toEqual({ status: "stopping" });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8765/shutdown",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          "X-Story-Guard-Token": "desktop-token",
-        }),
-      }),
-    );
-  });
-
   it("updates project titles with PATCH", async () => {
     const fetchMock = vi.fn(
       async () =>

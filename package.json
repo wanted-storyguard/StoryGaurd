@@ -8,21 +8,17 @@
     "dev:all": "concurrently -n backend,frontend \"npm run backend\" \"npm run dev\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
     "backend": ".venv/bin/python -m backend.app.main",
-    "test": "vitest run"
+    "test": "vitest run",
+    "backend:win": ".venv\\Scripts\\python.exe -m backend.app.main"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.4.0",
-    "@tauri-apps/plugin-dialog": "^2.2.0",
-    "@tauri-apps/plugin-shell": "^2.2.0",
     "cytoscape": "^3.30.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.4.0",
     "@types/cytoscape": "^3.21.8",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -32,7 +28,7 @@
     "vite": "^6.0.1",
     "vitest": "^4.1.9"
   },
-  "description": "Story Guard is a local-first desktop MVP for Korean fiction writers. It imports drafts, builds a local RAG index, extracts story-world entities, renders an Obsidian-style graph, and reports continuity risks such as broken settings, timeline errors, and unresolved foreshadowing.",
+  "description": "Story Guard web demo for Korean fiction writers: precomputed sample analysis, relationship graph, and GPT review of setting conflicts with source evidence.",
   "main": "index.js",
   "directories": {
     "doc": "docs"

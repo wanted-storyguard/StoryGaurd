@@ -167,20 +167,23 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
     finally { setBusy(false); }
   }
 
-  return <section className={`setup-panel chatgpt-panel${compact ? " chatgpt-panel-compact" : ""}`} aria-label="ChatGPT 계정 연결">
+  const apiKeyMode = status?.method === "api_key";
+  const usageOwner = apiKeyMode ? "서버에 설정된 OpenAI API 키의 사용량" : "내 계정의 사용 한도";
+  return <section className={`setup-panel chatgpt-panel${compact ? " chatgpt-panel-compact" : ""}`} aria-label={apiKeyMode ? "OpenAI API 연결" : "ChatGPT 계정 연결"}>
     <div className="setup-heading">
-      <div><span className="label">ChatGPT 계정 · Codex 연결</span>
-        <h3>{status?.phase === "connected" ? `연결됨${status.plan ? ` · ${status.plan}` : ""}` : status === null && initialStatusChecking ? "계정 상태 확인 중…" : "내 계정으로 AI 연결"}</h3>
+      <div><span className="label">{apiKeyMode ? "OpenAI API 키 · 서버 연결" : "ChatGPT 계정 · Codex 연결"}</span>
+        <h3>{status?.phase === "connected" ? `연결됨${status.plan ? ` · ${status.plan}` : ""}` : status === null && initialStatusChecking ? "연결 상태 확인 중…" : apiKeyMode ? "서버 API 키로 AI 연결" : "내 계정으로 AI 연결"}</h3>
       </div>
       <div className="setup-actions">
         <button disabled={busy} onClick={() => act(async () => { initialCheckActive.current = false; setStatus(await api.chatGptStatus()); setInitialStatusChecking(false); })}>상태 확인</button>
-        {status?.phase === "connected"
+        {apiKeyMode ? null : status?.phase === "connected"
           ? <button disabled={busy} onClick={() => act(async () => { setStatus(await api.chatGptLogout()); })}>연결 해제</button>
           : status?.phase === "pending"
             ? <button disabled={busy} onClick={() => act(async () => { setStatus(await api.chatGptCancel()); })}>인증 취소</button>
             : <button disabled={busy || status === null} onClick={() => act(async () => { setStatus(await api.chatGptLogin()); })}>{busy ? "연결 중…" : "ChatGPT 연결"}</button>}
       </div>
     </div>
+    {apiKeyMode && status?.phase !== "connected" && <p role="status">서버에 OPENAI_API_KEY가 설정되면 자동으로 연결됩니다. 로그인 절차는 없습니다.</p>}
     {!compact && <p>GPT 작품 분석은 로컬 검색으로 찾은 원문을 검토하고 설정 충돌 후보와 관계 지도를 함께 만듭니다. 관계는 AI가 추출한 후보이며 원문 근거로 확인할 수 있습니다.</p>}
     {status?.phase === "pending" && <div className="chatgpt-code">
       <p>아래 코드를 OpenAI 인증 페이지에 입력해 주세요. 인증을 마치면 자동으로 연결됩니다.</p>
@@ -220,11 +223,11 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
           {serverEstimate?.mode && <p className="analysis-estimate analysis-plan" role="note">권장 방식: {serverEstimate.mode === "full" ? "전체 분석" : serverEstimate.mode === "segmented" ? `분할 분석 (${serverEstimate.batchSize}개 구간씩)` : `단계 분석 (${serverEstimate.batchSize}개 구간씩)`}. {serverEstimate.batchCount ? `총 ${serverEstimate.batchCount}개 묶음. ` : ""}{serverEstimate.planMessage}</p>}
           {estimatedReviewWindows >= 100 && <p className="analysis-estimate analysis-estimate-warning" role="note">장편 원고입니다. 이번 실행은 최대 {serverEstimate?.batchSize ?? 20}개 구간만 처리하고 완료분을 체크포인트에 보존합니다{serverEstimate?.batchCount ? ` (전체 ${serverEstimate.batchCount}개 묶음)` : ""}. 전체 검증이 끝난 뒤 그래프에 게시하며, 앱을 닫아도 다음 실행에서 남은 묶음을 이어갑니다.</p>}
         </>}
-        <label><input type="checkbox" checked={manuscriptConsent} disabled={busy || analyzing || !hasDocuments} onChange={e => setManuscriptConsent(e.target.checked)} /> 선택한 작품의 원문을 OpenAI에 전송하고 내 계정의 사용 한도를 사용하는 데 동의합니다.</label>
+        <label><input type="checkbox" checked={manuscriptConsent} disabled={busy || analyzing || !hasDocuments} onChange={e => setManuscriptConsent(e.target.checked)} /> 선택한 작품의 원문을 OpenAI에 전송하고 {usageOwner}을 사용하는 데 동의합니다.</label>
         <label><input type="checkbox" checked={reuseResults} disabled={busy || analyzing} onChange={e => setReuseResults(e.target.checked)} /> 동일한 원문·검색 근거·모델·추론 강도의 검증된 결과 재사용 (추가 GPT 요청 절약)</label>
         <button disabled={busy || analyzing || !model || !hasDocuments || !manuscriptConsent || !onAnalyze} onClick={() => act(async () => { await onAnalyze?.(model, selectedEffort || undefined, !reuseResults, analysisRange); })}>{analyzing ? "작품 분석 중…" : "이 작품 GPT 분석"}</button>
       </div>}
-      {showAnalysis && !compact && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 내 계정의 사용 한도를 사용하는 데 동의합니다.</label>
+      {showAnalysis && !compact && !apiKeyMode && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 내 계정의 사용 한도를 사용하는 데 동의합니다.</label>
       <button disabled={busy || !model || !consent} onClick={() => act(async () => { setResult(""); setResult((await api.chatGptCheck(model, selectedEffort || undefined)).text); })}>{busy ? "확인 중…" : "샘플로 연결 검증"}</button></>}
     </div>}
     {(error || status?.error) && <p role="alert">{error || status?.error}</p>}
