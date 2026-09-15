@@ -46,6 +46,13 @@ $env:STORY_GUARD_WEB_ALLOW_GPT_ANALYZE = "1"
 - 돌리기 전에 시연할 규칙을 `POST /projects/{id}/settings`에 `certainty: confirmed`로 등록한다. 등록된 확정 설정은 모든 GPT 검토 구간에 자동으로 들어가므로, 1화 규칙과 7화 행동을 비교할 근거가 빠지지 않는다.
 - 서버에는 임베딩 모델이 없다. 라이브 검토는 미리 찾아둔 근거 + 사용자가 고친 장면을 GPT에 보내는 방식으로 설계한다.
 
+## 원고 올리기 (브라우저 파일 선택)
+
+- 원고·설정 화면의 "여러 원고 가져오기"는 브라우저 파일 선택창을 연다. txt·md·docx를 여러 개 고르면 파일명 속 회차 번호 순서로 올라간다. 수정본 교체도 같은 방식이다.
+- 브라우저는 파일 내용을 base64로 `POST /documents/upload`(`project_id`, `filename`, `content_base64`)와 `PUT /documents/{id}/upload`에 보낸다. 서버는 파일을 `STORY_GUARD_DATA_DIR/uploads/{project_id}/`에 저장한 뒤 경로 import와 같은 흐름(청킹·색인 예약)을 탄다. 5MB 초과는 413, 지원하지 않는 확장자·깨진 base64·UTF-8이 아닌 텍스트는 400이다.
+- 예전 `POST /documents/import`(서버 경로)는 스크립트용으로 남아 있다.
+- 웹 모드에서는 두 업로드 경로 모두 쓰기라서 기본적으로 403이다. 방문자 업로드를 열려면 `STORY_GUARD_WEB_WRITE_PATHS`에 `/documents/upload`를 넣되, 공유 DB에 쌓이는 점을 감안한다.
+
 ## 테스트 방법
 
 ### A. API 키로 GPT 분석 테스트 (임베딩 모델 없어도 됨)
