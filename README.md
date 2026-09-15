@@ -26,6 +26,22 @@ $env:STORY_GUARD_DATA_DIR = "C:\storyguard-demo-data"
 
 프로덕션 빌드는 `VITE_STORY_GUARD_API=https://<백엔드 주소> npm run build`로 만든다. 환경변수 전체와 배포 원칙은 [docs/web-demo-server.md](docs/web-demo-server.md)에 있다.
 
+## 변경 기록 (web-demo-lcs)
+
+### 2026-09-15
+
+- **OpenAI API 키 연결 추가.** 서버가 `OPENAI_API_KEY`로 GPT를 직접 호출한다. `backend/app/services/openai_api.py`가 기존 ChatGPT 로그인 클래스와 같은 인터페이스(`status`/`models`/`check`/`complete`)를 제공해 분석기와 `/chatgpt/*` 라우트는 그대로 동작한다. 키가 있으면 자동 선택되고 `STORY_GUARD_GPT_PROVIDER`로 강제할 수 있다.
+- **데스크톱 전용 코드 제거.** Tauri 셸(`src-tauri`), sidecar 진입점·빌드 스크립트, macOS DMG·서명 스크립트, Windows 릴리스 워크플로, 로컬 LLM 설치 화면, Local AI 상태, 파일 대화상자·드래그 앤 드롭을 이 브랜치에서 지웠다. `@tauri-apps/*` 패키지도 내렸다. 데스크톱 앱은 `main`에서 이어간다.
+- **웹 모드 가드 조정.** `/chatgpt/status`·`/chatgpt/models`는 열어 UI가 모델을 고를 수 있게 하고, 로그인·샘플 검증 경로는 막는다. 공개 서버의 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리며 접속당·하루 실행 횟수(`STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT`, `STORY_GUARD_WEB_GPT_RUNS_PER_DAY`)를 제한한다.
+- **AI 연결 패널.** 서버가 API 키 방식이면 로그인·연결 해제·샘플 검증 버튼을 숨기고 키 상태를 안내한다.
+- **검증.** 백엔드 230개 통과(기존 실패 3개: llama.cpp 미설치 2개, Windows 인코딩 1개), 프론트 112개 통과, 타입체크·프로덕션 빌드 통과. 실제 OpenAI 호출은 키가 없어 모의 서버로만 검증했으므로, 첫 키로 "샘플로 연결 검증"을 먼저 실행해 모델 목록·추론 강도·JSON 응답을 확인해야 한다.
+
+### 2026-09-14
+
+- 웹 모드 환경변수 추가: `STORY_GUARD_WEB_MODE`(데스크톱 전용 API 403·읽기 전용), `STORY_GUARD_WEB_WRITE_PATHS`, `STORY_GUARD_WEB_ORIGINS`(CORS), `STORY_GUARD_BIND_HOST`. 변수가 없으면 데스크톱 동작은 그대로다.
+- 브라우저 빌드는 `/shutdown`을 호출하지 않는다. 프론트 테스트가 실행 중인 로컬 백엔드를 종료시키던 문제를 고쳤다.
+- 제출 형태를 공개 웹 데모로 정리하고 `docs/web-demo-server.md`를 추가했다.
+
 ## 빠른 시작
 
 ```bash
