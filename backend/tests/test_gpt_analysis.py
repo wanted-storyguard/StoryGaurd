@@ -27,6 +27,31 @@ def test_parse_review_result_normalizes_numeric_evidence_ids():
     assert result.issues[0].evidence_chunk_ids == [42, 43]
 
 
+def test_parse_review_result_drops_ungrounded_entities_and_their_relations():
+    # Observed with gpt-5.6-luna: one minor entity arrives with `evidence: []`
+    # and used to fail the whole review window on min_length=1.
+    result = parse_review_result(json.dumps({
+        'entities': [
+            {'id': 'a', 'type': 'character', 'name': '유나', 'summary': '주인공',
+             'evidence': [{'chunk_id': 1, 'quote': '유나가 말했다.'}]},
+            {'id': 'b', 'type': 'place', 'name': '회백원', 'summary': '근거 없음', 'evidence': []},
+            {'id': 'c', 'type': 'item', 'name': '봉인검', 'summary': '검',
+             'evidence': [{'chunk_id': 2, 'quote': '봉인검을 들어 올렸다.'}]},
+        ],
+        'relations': [
+            {'source': 'a', 'target': 'b', 'type': '방문', 'explanation': '유나가 회백원에 갔다.', 'basis': 'explicit',
+             'evidence': [{'chunk_id': 1, 'quote': '유나가 말했다.'}]},
+            {'source': 'a', 'target': 'c', 'type': '사용', 'explanation': '유나가 봉인검을 사용했다.', 'basis': 'explicit',
+             'evidence': [{'chunk_id': 2, 'quote': '봉인검을 들어 올렸다.'}]},
+            {'source': 'c', 'target': 'a', 'type': '소유', 'explanation': '근거 없는 관계입니다.', 'basis': 'inferred',
+             'evidence': []},
+        ],
+        'issues': [],
+    }))
+    assert [entity.id for entity in result.entities] == ['a', 'c']
+    assert [(relation.source, relation.target) for relation in result.relations] == [('a', 'c')]
+
+
 def test_gpt_analysis_persists_only_grounded_candidates(tmp_path):
     repo, project, ids, rag = fixture(tmp_path)
     calls = []

@@ -91,6 +91,26 @@ def parse_review_result(text: str) -> ReviewResult:
                 int(value.strip()) if isinstance(value, str) and value.strip().lstrip('-').isdigit() else value
                 for value in values
             ]
+    # The prompt tells the model to omit an entity or relation it cannot quote.
+    # Some models send it with an empty evidence list instead, which would
+    # fail the whole window on `min_length=1`. Dropping the ungrounded item is
+    # what the prompt asked for; relations that depended on it go with it.
+    # Populated evidence still goes through full Pydantic and quote grounding.
+    dropped_entity_ids = set()
+    kept_entities = []
+    for item in payload.get('entities') or []:
+        if isinstance(item, dict) and not item.get('evidence'):
+            dropped_entity_ids.add(item.get('id'))
+            continue
+        kept_entities.append(item)
+    payload['entities'] = kept_entities
+    payload['relations'] = [
+        item for item in payload.get('relations') or []
+        if not (isinstance(item, dict) and (
+            not item.get('evidence')
+            or item.get('source') in dropped_entity_ids
+            or item.get('target') in dropped_entity_ids))
+    ]
     # Some models omit empty collections despite the schema instruction. These
     # defaults are semantics-preserving; populated fields still undergo full
     # Pydantic validation below.
