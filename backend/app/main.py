@@ -117,12 +117,71 @@ def bind_host() -> str:
 WEB_MODE_BLOCKED_PREFIXES = (
     "/shutdown",
     "/setup",
-    "/chatgpt",
     "/documents/import",
     "/documents/replace",
     "/health/local-ai",
+    # ChatGPT device login is desktop-only; the web server connects with an
+    # API key, so only status/models stay reachable and the sample check is
+    # closed because it spends tokens without any limit.
+    "/chatgpt/login",
+    "/chatgpt/cancel",
+    "/chatgpt/logout",
+    "/chatgpt/open-verification",
+    "/chatgpt/check",
 )
 WEB_MODE_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+WEB_GPT_ANALYZE_PATH = re.compile(r"^/projects/\d+/(analyze/gpt|analysis/cancel)$")
+
+
+def web_gpt_analyze_enabled() -> bool:
+    """Public GPT analysis is opt-in; it spends the operator's API budget."""
+    return os.getenv("STORY_GUARD_WEB_ALLOW_GPT_ANALYZE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    return int(raw) if raw.isdigit() else default
+
+
+class DailyRequestMeter:
+    """Per-day request counts, overall and per client, kept in memory.
+
+    Good enough for a short public demo: the process restart resets it and a
+    hard spend limit on the OpenAI project remains the backstop.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self) -> None:
+        self._day = time.strftime("%Y-%m-%d")
+        self._total = 0
+        self._by_client: dict[str, int] = defaultdict(int)
+
+    def take(self, client: str, per_client_limit: int, daily_limit: int) -> str | None:
+        """Consume one request; return a refusal message or None when allowed."""
+        with self._lock:
+            today = time.strftime("%Y-%m-%d")
+            if today != self._day:
+                self.reset()
+            if self._total >= daily_limit:
+                return "오늘 공개 데모의 GPT 분석 한도에 도달했습니다. 내일 다시 시도해 주세요."
+            if self._by_client[client] >= per_client_limit:
+                return "이 접속에서 실행할 수 있는 GPT 분석 횟수를 모두 사용했습니다."
+            self._total += 1
+            self._by_client[client] += 1
+            return None
+
+
+web_gpt_meter = DailyRequestMeter()
+
+
+def request_client_id(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
 
 
 def web_mode_allows(method: str, path: str) -> bool:
@@ -232,11 +291,27 @@ async def require_local_api_token(request: Request, call_next):
 
 @app.middleware("http")
 async def public_web_demo_guard(request: Request, call_next):
-    if web_mode_enabled() and not web_mode_allows(request.method, request.url.path):
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "공개 웹 데모에서는 사용할 수 없는 기능입니다. 데스크톱 앱에서 제공합니다."},
-        )
+    if web_mode_enabled():
+        path = request.url.path
+        if request.method == "POST" and WEB_GPT_ANALYZE_PATH.match(path):
+            if not web_gpt_analyze_enabled():
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "공개 웹 데모에서는 GPT 분석을 열어 두지 않았습니다. 미리 분석된 결과를 확인해 주세요."},
+                )
+            if path.endswith("/analyze/gpt"):
+                refusal = web_gpt_meter.take(
+                    request_client_id(request),
+                    _env_int("STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT", 3),
+                    _env_int("STORY_GUARD_WEB_GPT_RUNS_PER_DAY", 200),
+                )
+                if refusal:
+                    return JSONResponse(status_code=429, content={"detail": refusal})
+        elif not web_mode_allows(request.method, path):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "공개 웹 데모에서는 사용할 수 없는 기능입니다. 데스크톱 앱에서 제공합니다."},
+            )
     return await call_next(request)
 
 

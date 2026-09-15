@@ -58,3 +58,10 @@ def provider_error(payload):
             break
     message, retryable, stop_run = _CATEGORIES[code]
     return GptRequestError(code, message, retryable=retryable, stop_run=stop_run)
+
+
+def error_for_code(code: str) -> GptRequestError:
+    """Build the user-facing error for a known category (API-key path and tests)."""
+    known = code if code in _CATEGORIES else 'unknown_provider_error'
+    message, retryable, stop_run = _CATEGORIES[known]
+    return GptRequestError(known, message, retryable=retryable, stop_run=stop_run)

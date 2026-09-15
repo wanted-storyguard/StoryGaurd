@@ -2,10 +2,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.config import app_data_dir
-from backend.app.services.chatgpt import ChatGptConnection
+from backend.app.services.gpt_connection import build_gpt_connection
 
 router = APIRouter(prefix='/chatgpt', tags=['chatgpt'])
-connection = ChatGptConnection(app_data_dir())
+# ChatGPT device login (desktop) or OpenAI API key (web server), chosen by environment.
+connection = build_gpt_connection(app_data_dir())
 
 
 class CheckRequest(BaseModel):

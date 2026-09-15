@@ -39,12 +39,18 @@ def test_web_mode_blocks_desktop_only_paths_and_writes(monkeypatch) -> None:
     assert client.get("/health/ready").status_code == 200
     assert client.get("/projects").status_code == 200
 
+    # Connection status and model listing stay readable so the web UI can
+    # pick a model; the desktop login flow and the token-spending sample
+    # check are closed.
+    assert client.get("/chatgpt/status").status_code == 200
+
     blocked = [
         ("POST", "/shutdown"),
         ("POST", "/setup/run"),
         ("GET", "/setup/status"),
         ("POST", "/chatgpt/login"),
-        ("GET", "/chatgpt/status"),
+        ("POST", "/chatgpt/logout"),
+        ("POST", "/chatgpt/check"),
         ("POST", "/documents/import"),
         ("GET", "/health/local-ai"),
         ("POST", "/projects"),
@@ -87,3 +93,38 @@ def test_web_mode_invalid_regex_fails_closed(monkeypatch) -> None:
     monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
     monkeypatch.setenv("STORY_GUARD_WEB_WRITE_PATHS", r"/demo/(")
     assert web_mode_allows("POST", "/demo/review") is False
+
+
+def test_web_mode_gpt_analysis_is_opt_in_and_metered(monkeypatch) -> None:
+    monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
+    monkeypatch.delenv("STORY_GUARD_WEB_ALLOW_GPT_ANALYZE", raising=False)
+    client = TestClient(app)
+    closed = client.post("/projects/1/analyze/gpt", json={"model": "m", "consent": True})
+    assert closed.status_code == 403
+    assert "GPT 분석" in closed.json()["detail"]
+
+    monkeypatch.setenv("STORY_GUARD_WEB_ALLOW_GPT_ANALYZE", "1")
+    monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT", "1")
+    monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_DAY", "10")
+    main_module.web_gpt_meter.reset()
+    # Missing consent proves the request passed the guard without spending anything.
+    first = client.post("/projects/1/analyze/gpt", json={"model": "m"})
+    assert first.status_code == 400
+    second = client.post("/projects/1/analyze/gpt", json={"model": "m"})
+    assert second.status_code == 429
+    assert "횟수" in second.json()["detail"]
+    # Cancelling is allowed alongside analysis and is not metered.
+    assert client.post("/projects/1/analysis/cancel").status_code != 403
+
+    other = client.post("/projects/1/analyze/gpt", json={"model": "m"}, headers={"x-forwarded-for": "203.0.113.9"})
+    assert other.status_code == 400
+    main_module.web_gpt_meter.reset()
+
+
+def test_daily_meter_limits_total_and_per_client() -> None:
+    meter = main_module.DailyRequestMeter()
+    assert meter.take("a", per_client_limit=2, daily_limit=3) is None
+    assert meter.take("a", per_client_limit=2, daily_limit=3) is None
+    assert "횟수" in meter.take("a", per_client_limit=2, daily_limit=3)
+    assert meter.take("b", per_client_limit=2, daily_limit=3) is None
+    assert "한도" in meter.take("c", per_client_limit=2, daily_limit=3)
