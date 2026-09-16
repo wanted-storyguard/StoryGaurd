@@ -177,6 +177,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS web_demo_daily_usage (
+  usage_date TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  subject_key TEXT NOT NULL,
+  runs INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(usage_date, scope, subject_key)
+);
+CREATE INDEX IF NOT EXISTS web_demo_daily_usage_scope
+  ON web_demo_daily_usage(usage_date, scope);
 """
 
 

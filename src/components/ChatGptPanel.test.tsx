@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ChatGptPanel, estimateReviewWindows, formatDurationRange, formatMemoryGigabytes } from "./ChatGptPanel";
+import { ChatGptPanel, WebDemoQuotaNotice, estimateReviewWindows, formatDurationRange, formatMemoryGigabytes } from "./ChatGptPanel";
 
 describe("ChatGPT connection", () => {
   it("distinguishes connection verification from existing local analysis", () => {
@@ -40,4 +40,22 @@ it("formats GPT estimate ranges with one clear approximation label", () => {
 it("formats measured embedding memory in the same decimal unit used by the docs", () => {
   expect(formatMemoryGigabytes(2275)).toBe("2.27GB");
   expect(formatMemoryGigabytes(0)).toBe("확인 필요");
+});
+
+it("shows the effective daily web demo quota and sample bounds", () => {
+  const html = renderToStaticMarkup(<WebDemoQuotaNotice quota={{
+    enabled: true,
+    limit: 3,
+    used: 1,
+    remaining: 2,
+    ip_limit: 9,
+    ip_remaining: 8,
+    total_limit: 200,
+    total_remaining: 150,
+    resets_at: "2026-09-17T00:00:00Z",
+    max_chapters: 2,
+    max_review_windows: 4,
+  }} />);
+  expect(html).toContain("오늘 남은 분석 2/3회");
+  expect(html).toContain("최대 2개 회차·4개 검토 구간");
 });

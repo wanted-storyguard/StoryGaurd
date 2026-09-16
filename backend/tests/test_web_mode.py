@@ -76,26 +76,17 @@ def test_web_mode_preflight_is_not_blocked(monkeypatch) -> None:
     assert response.status_code == 200
 
 
-def test_web_mode_write_allowlist_regex(monkeypatch) -> None:
+def test_web_mode_writes_stay_closed_even_with_legacy_allowlist(monkeypatch) -> None:
     monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
-    monkeypatch.setenv("STORY_GUARD_WEB_WRITE_PATHS", r"/demo/(review|sessions)(/[0-9]+)?")
-    assert web_mode_allows("POST", "/demo/review") is True
-    assert web_mode_allows("POST", "/demo/sessions/12") is True
-    assert web_mode_allows("POST", "/projects") is False
-    assert web_mode_allows("POST", "/demo/reviewer") is False
-    # Desktop-only prefixes stay blocked even if a regex would match them.
     monkeypatch.setenv("STORY_GUARD_WEB_WRITE_PATHS", r"/.*")
+    assert web_mode_allows("POST", "/demo/review") is False
+    assert web_mode_allows("POST", "/demo/sessions/12") is False
+    assert web_mode_allows("POST", "/projects") is False
     assert web_mode_allows("POST", "/shutdown") is False
     assert web_mode_allows("POST", "/documents/import") is False
 
 
-def test_web_mode_invalid_regex_fails_closed(monkeypatch) -> None:
-    monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
-    monkeypatch.setenv("STORY_GUARD_WEB_WRITE_PATHS", r"/demo/(")
-    assert web_mode_allows("POST", "/demo/review") is False
-
-
-def test_web_mode_gpt_analysis_is_opt_in_and_metered(monkeypatch) -> None:
+def test_web_mode_gpt_analysis_is_opt_in_and_invalid_requests_do_not_spend(monkeypatch) -> None:
     monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
     monkeypatch.delenv("STORY_GUARD_WEB_ALLOW_GPT_ANALYZE", raising=False)
     client = TestClient(app)
@@ -104,27 +95,29 @@ def test_web_mode_gpt_analysis_is_opt_in_and_metered(monkeypatch) -> None:
     assert "GPT 분석" in closed.json()["detail"]
 
     monkeypatch.setenv("STORY_GUARD_WEB_ALLOW_GPT_ANALYZE", "1")
-    monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT", "1")
+    monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_SESSION", "1")
+    monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_IP", "10")
     monkeypatch.setenv("STORY_GUARD_WEB_GPT_RUNS_PER_DAY", "10")
-    main_module.web_gpt_meter.reset()
-    # Missing consent proves the request passed the guard without spending anything.
+    quota_before = client.get("/web-demo/quota")
+    assert quota_before.status_code == 200
+    assert quota_before.json()["remaining"] == 1
+
     first = client.post("/projects/1/analyze/gpt", json={"model": "m"})
     assert first.status_code == 400
     second = client.post("/projects/1/analyze/gpt", json={"model": "m"})
-    assert second.status_code == 429
-    assert "횟수" in second.json()["detail"]
+    assert second.status_code == 400
+    assert client.get("/web-demo/quota").json()["remaining"] == 1
     # Cancelling is allowed alongside analysis and is not metered.
     assert client.post("/projects/1/analysis/cancel").status_code != 403
 
-    other = client.post("/projects/1/analyze/gpt", json={"model": "m"}, headers={"x-forwarded-for": "203.0.113.9"})
-    assert other.status_code == 400
-    main_module.web_gpt_meter.reset()
 
-
-def test_daily_meter_limits_total_and_per_client() -> None:
-    meter = main_module.DailyRequestMeter()
-    assert meter.take("a", per_client_limit=2, daily_limit=3) is None
-    assert meter.take("a", per_client_limit=2, daily_limit=3) is None
-    assert "횟수" in meter.take("a", per_client_limit=2, daily_limit=3)
-    assert meter.take("b", per_client_limit=2, daily_limit=3) is None
-    assert "한도" in meter.take("c", per_client_limit=2, daily_limit=3)
+def test_web_mode_issues_signed_anonymous_session_cookie(monkeypatch) -> None:
+    monkeypatch.setenv("STORY_GUARD_WEB_MODE", "1")
+    client = TestClient(app)
+    first = client.get("/web-demo/quota")
+    assert first.status_code == 200
+    assert "storyguard_demo_session=" in first.headers["set-cookie"]
+    assert "HttpOnly" in first.headers["set-cookie"]
+    second = client.get("/web-demo/quota")
+    assert second.status_code == 200
+    assert "set-cookie" not in second.headers

@@ -24,6 +24,7 @@ import type {
   StoryDocument,
   StorySetting,
   ForeshadowingStatus,
+  WebDemoQuota,
 } from "./lib/types";
 const GraphView = lazy(() => import("./components/GraphView").then(({ GraphView: view }) => ({ default: view })));
 import { Inspector } from "./components/Inspector";
@@ -319,6 +320,7 @@ export default function App() {
   );
   const [evidenceByIssueId, setEvidenceByIssueId] = useState<Record<number, EvidenceChunk[]>>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [webDemoQuota, setWebDemoQuota] = useState<WebDemoQuota | null>(null);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
   const [lastAnalysisRequest, setLastAnalysisRequest] = useState<{ model?: string; effort?: string; force?: boolean; range?: ChapterRange } | null>(null);
   const retryRequest = analysisJob ? analysisRetryRequest(analysisJob, lastAnalysisRequest) : null;
@@ -348,6 +350,12 @@ export default function App() {
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [page]);
+
+  useEffect(() => {
+    let disposed = false;
+    api.webDemoQuota().then(value => { if (!disposed) setWebDemoQuota(value); }).catch(() => { /* desktop startup remains unchanged */ });
+    return () => { disposed = true; };
+  }, []);
 
   useEffect(() => {
     const modalOpen = projectModalOpen;
@@ -1159,7 +1167,7 @@ export default function App() {
       // busy for hours without an explicit continuation.
       let automaticBatches = 1;
       const MAX_AUTOMATIC_BATCHES = 3;
-      while (model && automaticBatches < MAX_AUTOMATIC_BATCHES && latestJob?.status === 'partial'
+      while (model && !("demo_limited" in result && result.demo_limited) && automaticBatches < MAX_AUTOMATIC_BATCHES && latestJob?.status === 'partial'
         && latestJob.message.includes('나머지를 이어갑니다')
         && !(latestJob.window_details ?? []).some(window => ['failed', 'interrupted'].includes(window.status))) {
         result = await api.analyzeProjectGpt(project.id, model, effort, false, 20, range);
@@ -1239,7 +1247,7 @@ export default function App() {
         <header className="workspace-header">
           <div className="title-area">
             <h1 className="page-title">{PAGES[page][0]}</h1><p className="page-description">{PAGES[page][1]}</p>
-            {editingProjectTitle && selectedProject && !['welcome','projects','setup','settings'].includes(page) ? (
+            {editingProjectTitle && selectedProject && !webDemoQuota?.enabled && !['welcome','projects','setup','settings'].includes(page) ? (
               <form className="project-title-editor" onSubmit={saveProjectTitle}>
                 <input
                   autoFocus
@@ -1265,7 +1273,7 @@ export default function App() {
             ) : (
               <div className={`project-title-row ${['welcome','projects','setup','settings'].includes(page) ? 'context-hidden' : ''}`}>
                 <h2>{selectedProject?.title ?? "작품 없음"}</h2>
-                {selectedProject && (
+                {selectedProject && !webDemoQuota?.enabled && (
                   <>
                     <button
                       className="icon-button"
@@ -1306,11 +1314,11 @@ export default function App() {
             <button onClick={() => setPage('projects')}>내 작품으로 이동</button>
           </div>
         </section>}
-        <section hidden={page !== 'projects'}><ProjectsPage projects={projects} onCreate={createProject} onOpen={project=>{selectProject(project);setPage('manuscripts');}}/></section>
-        <section hidden={page !== 'manuscripts' || projectDataBlocked}><ManuscriptsPage key={selectedProject?.id ?? "no-project"} active={page==='manuscripts'} sourceRequest={sourceRequest} documents={documents} settings={storySettings} onCreateSetting={createStorySetting} onUpdateSetting={updateStorySetting} onDeleteSetting={deleteStorySetting} onImport={importDocument} onDelete={deleteDocument} onReplace={replaceDocument} onAnalyze={()=>setPage('analysis')} loading={workspaceBusy}/></section>
-        <section hidden={page !== 'review' || projectDataBlocked}><ReviewPage key={selectedProject?.id ?? "review-no-project"} history={reviewHistory} graph={graph} documents={documents} evidence={evidenceByIssueId} onStatus={updateIssueStatus} onOpenDocument={(documentId,quote) => {setSourceRequest({documentId,quote});setPage('manuscripts');}} onGraph={(relationId) => {const relation = relationId == null ? undefined : graph.relations.find(item => item.id === relationId); setSelectedRelationId(relationId ?? null); setSelectedEntity(relation ? graph.entities.find(entity => entity.id === relation.source_entity_id) ?? null : null); setPage('graph');}} onAnalysis={()=>setPage(documents.length ? 'analysis' : 'manuscripts')}/></section>
-        <section hidden={page !== 'welcome'} className="welcome-page surface"><span className="eyebrow">작가의 판단을 돕는 도구</span><h2>이야기에 몰입하세요.<br/>설정의 연결은 함께 살펴볼게요.</h2><p>원고를 가져오면 인물과 설정의 관계를 정리하고,<br/>다시 확인할 부분을 원문 근거와 함께 보여드립니다.</p><div className="welcome-steps"><div>01<br/><strong>원고 가져오기</strong></div><div>02<br/><strong>내 AI로 분석하기</strong></div><div>03<br/><strong>근거 읽고 판단하기</strong></div></div><button className="primary" onClick={()=>setPage('setup')}>시작하기 →</button><p className="muted">원고는 로컬에 저장됩니다. 분석 시 동의한 원문은 외부 GPT로 전송됩니다.</p></section>
-        <section hidden={page !== 'foreshadowing' || projectDataBlocked} className="page-content"><div className="surface"><h2>추출된 떡밥 후보</h2><p className="muted">AI는 등장 단서를 후보로 제시합니다. 마지막 언급 이후 공백만으로 미회수라고 단정하지 않고, 작가가 상태를 결정합니다.</p>{graph.entities.filter(e=>e.type==='foreshadowing').map(e=>{const current=foreshadowingStatuses.find(item=>item.entity_id===e.id)?.status??'unreviewed';return <div className="source-card foreshadowing-card" key={e.id}><div><h3>{e.name}</h3><span className={`setting-certainty ${current}`}>{{unreviewed:'검토 전',in_progress:'진행 중',resolved:'회수 확인',intentional:'의도적 미회수'}[current]}</span></div><p>{e.summary}</p><p className="muted">등장 회차 {e.document_ids.map(id=>documents.find(d=>d.id===id)?.chapter_index).filter((v):v is number=>v!==undefined).sort((a,b)=>a-b).map(ch=>`${ch+1}화`).join(' · ')||'확인 중'}</p><div className="foreshadowing-actions"><select aria-label={`${e.name} 상태`} value={current} onChange={event=>void updateForeshadowingStatus(e.id,event.target.value as ForeshadowingStatus['status'])}><option value="unreviewed">검토 전</option><option value="in_progress">진행 중</option><option value="resolved">회수 확인</option><option value="intentional">의도적 미회수</option></select><button onClick={()=>{setSelectedEntity(e);setPage('graph');}}>관계 지도에서 확인</button></div></div>})}{!graph.entities.some(e=>e.type==='foreshadowing')&&<div className="blank-state"><p>{graph.entities.length ? '현재 분석 결과에 떡밥 유형 후보가 없습니다. 원문에서 단서를 찾으려면 다시 분석해 보세요.' : '원고를 가져온 뒤 분석을 시작하면 떡밥 후보가 여기에 표시됩니다.'}</p><button className="primary" onClick={()=>setPage(graph.entities.length ? 'analysis' : 'manuscripts')}>{graph.entities.length ? '분석 설정으로 이동' : '원고 가져오기'}</button></div>}</div></section>
+        <section hidden={page !== 'projects'}><ProjectsPage projects={projects} readOnlyDemo={webDemoQuota?.enabled} onCreate={createProject} onOpen={project=>{selectProject(project);setPage('manuscripts');}}/></section>
+        <section hidden={page !== 'manuscripts' || projectDataBlocked}><ManuscriptsPage key={selectedProject?.id ?? "no-project"} active={page==='manuscripts'} sourceRequest={sourceRequest} documents={documents} settings={storySettings} readOnlyDemo={webDemoQuota?.enabled} onCreateSetting={createStorySetting} onUpdateSetting={updateStorySetting} onDeleteSetting={deleteStorySetting} onImport={importDocument} onDelete={deleteDocument} onReplace={replaceDocument} onAnalyze={()=>setPage('analysis')} loading={workspaceBusy}/></section>
+        <section hidden={page !== 'review' || projectDataBlocked}><ReviewPage key={selectedProject?.id ?? "review-no-project"} history={reviewHistory} graph={graph} documents={documents} evidence={evidenceByIssueId} readOnlyDemo={webDemoQuota?.enabled} onStatus={updateIssueStatus} onOpenDocument={(documentId,quote) => {setSourceRequest({documentId,quote});setPage('manuscripts');}} onGraph={(relationId) => {const relation = relationId == null ? undefined : graph.relations.find(item => item.id === relationId); setSelectedRelationId(relationId ?? null); setSelectedEntity(relation ? graph.entities.find(entity => entity.id === relation.source_entity_id) ?? null : null); setPage('graph');}} onAnalysis={()=>setPage(documents.length ? 'analysis' : 'manuscripts')}/></section>
+        <section hidden={page !== 'welcome'} className="welcome-page surface"><span className="eyebrow">작가의 판단을 돕는 도구</span><h2>이야기에 몰입하세요.<br/>설정의 연결은 함께 살펴볼게요.</h2><p>{webDemoQuota?.enabled?'준비된 샘플에서 인물과 설정의 관계를 살펴보고, 짧은 범위를 직접 분석해 보세요.':<>원고를 가져오면 인물과 설정의 관계를 정리하고,<br/>다시 확인할 부분을 원문 근거와 함께 보여드립니다.</>}</p><div className="welcome-steps"><div>01<br/><strong>{webDemoQuota?.enabled?'샘플 열기':'원고 가져오기'}</strong></div><div>02<br/><strong>{webDemoQuota?.enabled?'짧은 범위 분석':'내 AI로 분석하기'}</strong></div><div>03<br/><strong>근거 읽고 판단하기</strong></div></div><button className="primary" onClick={()=>setPage('setup')}>{webDemoQuota?.enabled?'샘플 체험하기 →':'시작하기 →'}</button><p className="muted">{webDemoQuota?.enabled?'업로드 없이 준비된 샘플만 사용하며, 분석 횟수는 하루 3회로 제한됩니다.':'원고는 로컬에 저장됩니다. 분석 시 동의한 원문은 외부 GPT로 전송됩니다.'}</p></section>
+        <section hidden={page !== 'foreshadowing' || projectDataBlocked} className="page-content"><div className="surface"><h2>추출된 떡밥 후보</h2><p className="muted">AI는 등장 단서를 후보로 제시합니다. 마지막 언급 이후 공백만으로 미회수라고 단정하지 않고, 작가가 상태를 결정합니다.</p>{graph.entities.filter(e=>e.type==='foreshadowing').map(e=>{const current=foreshadowingStatuses.find(item=>item.entity_id===e.id)?.status??'unreviewed';return <div className="source-card foreshadowing-card" key={e.id}><div><h3>{e.name}</h3><span className={`setting-certainty ${current}`}>{{unreviewed:'검토 전',in_progress:'진행 중',resolved:'회수 확인',intentional:'의도적 미회수'}[current]}</span></div><p>{e.summary}</p><p className="muted">등장 회차 {e.document_ids.map(id=>documents.find(d=>d.id===id)?.chapter_index).filter((v):v is number=>v!==undefined).sort((a,b)=>a-b).map(ch=>`${ch+1}화`).join(' · ')||'확인 중'}</p><div className="foreshadowing-actions"><select aria-label={`${e.name} 상태`} value={current} disabled={webDemoQuota?.enabled} onChange={event=>void updateForeshadowingStatus(e.id,event.target.value as ForeshadowingStatus['status'])}><option value="unreviewed">검토 전</option><option value="in_progress">진행 중</option><option value="resolved">회수 확인</option><option value="intentional">의도적 미회수</option></select><button onClick={()=>{setSelectedEntity(e);setPage('graph');}}>관계 지도에서 확인</button></div></div>})}{!graph.entities.some(e=>e.type==='foreshadowing')&&<div className="blank-state"><p>{graph.entities.length ? '현재 분석 결과에 떡밥 유형 후보가 없습니다. 원문에서 단서를 찾으려면 다시 분석해 보세요.' : '원고를 가져온 뒤 분석을 시작하면 떡밥 후보가 여기에 표시됩니다.'}</p><button className="primary" onClick={()=>setPage(graph.entities.length ? 'analysis' : 'manuscripts')}>{graph.entities.length ? '분석 설정으로 이동' : webDemoQuota?.enabled ? '샘플 작품 보기' : '원고 가져오기'}</button></div>}</div></section>
         <section hidden={!['analysis','settings','setup'].includes(page) || (page === 'analysis' && projectDataBlocked)} className="analysis-layout">
           <div className="surface analysis-target">
             {page === 'analysis' ? <><h2>분석 대상</h2><div className="soft-card"><strong>{selectedProject?.title ?? '작품을 선택하세요'}</strong><p>전체 원고 · {documents.length}편 · {formatManuscriptChars(documents)}</p><p className="muted">원고 전체를 로컬에서 색인한 뒤, 선택한 회차 범위를 여러 구간으로 묶어 순서대로 검토합니다. 첫 실행은 검색 색인 시간이 필요하고, 이미 검증된 구간은 재시도 때 재사용합니다.</p></div><p className="muted analysis-list-hint">회차를 누르면 원고가 열립니다. 분석 회차 범위는 오른쪽 GPT 분석 패널에서 선택합니다.</p><DocumentPicker key={selectedProject?.id ?? 'analysis-no-project'} documents={documents} onSelect={documentId=>{setSourceRequest({documentId});setPage('manuscripts');}}/><button onClick={()=>setPage('manuscripts')}>{documents.length ? '원고·설정 관리' : '원고 가져오기'}</button><hr/><h3>이번 분석에서 확인할 내용</h3><p>설정 충돌 후보와 인물·아이템·규칙의 관계를 원문 근거와 함께 정리합니다.</p></> : page === 'setup' ? <><h2>준비 순서</h2><div className="soft-card"><strong>1. GPT 연결 확인</strong><p>서버에 설정된 OpenAI API 키로 연결됩니다. 오른쪽에서 상태와 모델을 확인합니다.</p><strong>2. 예시 작품 열기</strong><p>미리 준비된 작품의 원고·설정·분석 결과를 살펴봅니다.</p><strong>3. 장면 검토</strong><p>선택한 범위를 GPT로 검토하고 원문 근거와 함께 확인합니다.</p></div><button className="primary" onClick={()=>setPage('projects')}>내 작품으로 이동</button></> : <><h2>저장·분석 환경</h2><div className="soft-card"><strong>원고는 서버에 저장됩니다.</strong><p>GPT 분석을 실행할 때 동의한 원문과 검색 근거만 OpenAI로 전송됩니다.</p></div><button onClick={()=>setPage('manuscripts')}>원고·설정 열기</button></>}
