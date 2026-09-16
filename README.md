@@ -9,10 +9,10 @@ Story Guard는 웹소설, 장편 소설, 드라마 시나리오처럼 설정과 
 원티드 AI 챔피언십 FAQ(9/10)는 검증되지 않은 설치 파일(exe·dmg) 다운로드를 허용하지 않고, 데스크톱 앱은 스토어 링크 또는 **핵심 기능을 체험할 수 있는 웹 데모 URL**로 제출하도록 안내한다. 팀은 제출물을 웹 데모로 정했고, 데스크톱 앱은 제출 이후에 이어간다.
 
 - 같은 코드베이스를 Tauri 없이 서버에 올린다. 프론트는 정적 빌드, 백엔드는 FastAPI를 **웹 모드**로 실행한다.
-- 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 종료·로컬 모델 설치·ChatGPT 로그인·서버 경로 import 같은 데스크톱 전용 API를 403으로 막고, 샘플 작품을 읽기 전용으로 제공한다. 쓰기는 `STORY_GUARD_WEB_WRITE_PATHS` 정규식에 맞는 경로만 허용한다.
+- 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 준비된 샘플을 읽기 전용으로 제공한다. 업로드와 프로젝트·설정·판단 변경은 항상 403이고, 제한된 GPT 분석/취소만 별도로 허용한다.
 - 샘플 작품의 청킹·임베딩·GPT 분석은 로컬에서 미리 돌리고, 그 결과 데이터 폴더(SQLite·Chroma)를 서버의 `STORY_GUARD_DATA_DIR`로 올린다. 서버에는 임베딩 모델을 두지 않는다.
-- GPT 호출은 서버가 `OPENAI_API_KEY`로 직접 한다. 키가 있으면 자동으로 API 키 연결이 선택되고, 방문자에게 로그인을 요구하지 않는다. 공개 서버의 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리며 접속당·하루 횟수 한도가 걸린다.
-- 이 브랜치(`web-demo-lcs`)에서는 Tauri 셸, sidecar 빌드 스크립트, Windows 릴리스 워크플로, 로컬 LLM 설치 화면을 제거했다. 데스크톱 앱은 `main`에서 이어간다.
+- GPT 호출은 서버가 `OPENAI_API_KEY`로 직접 한다. 방문자 로그인 없이 서명된 익명 세션 쿠키를 발급하고, 세션당 3회·IP 보조 한도·서버 전체 일일 한도를 SQLite에 영구 저장한다.
+- 웹 데모는 `web-demo-lcs` 계열에서, 다운로드형 데스크톱 앱은 `develop-jh`에서 이어간다.
 
 웹 모드 로컬 확인:
 
@@ -28,11 +28,17 @@ $env:STORY_GUARD_DATA_DIR = "C:\storyguard-demo-data"
 
 ## 변경 기록 (web-demo-lcs)
 
+### 2026-09-16
+
+- **익명 데모 한도 영구 저장.** 서명된 HttpOnly 쿠키와 날짜를 기준으로 세션 사용량을 SQLite에 저장한다. IP(해시 저장)와 서버 전체 일일 한도를 함께 검사해 재시작 뒤에도 유지한다.
+- **짧은 샘플 분석.** 한 번에 최대 2개 회차·4개 검토 구간만 허용하고, 웹 데모에서는 자동 연속 분석을 하지 않는다. 화면에 `오늘 남은 분석 n/3회`를 표시한다.
+- **샘플 전용 UI.** 공개 웹에서는 프로젝트·원고·설정·판단 변경 UI와 업로드를 닫는다. API에서도 예전 쓰기 허용 정규식을 무시해 공유 샘플이 바뀌지 않게 한다.
+
 ### 2026-09-15
 
 - **OpenAI API 키 연결 추가.** 서버가 `OPENAI_API_KEY`로 GPT를 직접 호출한다. `backend/app/services/openai_api.py`가 기존 ChatGPT 로그인 클래스와 같은 인터페이스(`status`/`models`/`check`/`complete`)를 제공해 분석기와 `/chatgpt/*` 라우트는 그대로 동작한다. 키가 있으면 자동 선택되고 `STORY_GUARD_GPT_PROVIDER`로 강제할 수 있다.
 - **데스크톱 전용 코드 제거.** Tauri 셸(`src-tauri`), sidecar 진입점·빌드 스크립트, macOS DMG·서명 스크립트, Windows 릴리스 워크플로, 로컬 LLM 설치 화면, Local AI 상태, 파일 대화상자·드래그 앤 드롭을 이 브랜치에서 지웠다. `@tauri-apps/*` 패키지도 내렸다. 데스크톱 앱은 `main`에서 이어간다.
-- **웹 모드 가드 조정.** `/chatgpt/status`·`/chatgpt/models`는 열어 UI가 모델을 고를 수 있게 하고, 로그인·샘플 검증 경로는 막는다. 공개 서버의 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리며 접속당·하루 실행 횟수(`STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT`, `STORY_GUARD_WEB_GPT_RUNS_PER_DAY`)를 제한한다.
+- **웹 모드 가드 조정.** `/chatgpt/status`·`/chatgpt/models`는 열어 UI가 모델을 고를 수 있게 하고, 로그인·샘플 검증 경로는 막는다. 공개 서버의 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열린다.
 - **AI 연결 패널.** 서버가 API 키 방식이면 로그인·연결 해제 버튼을 숨기고 키 상태를 안내한다. "샘플로 연결 검증"은 API 키 방식에서도 쓸 수 있다.
 - **원고는 브라우저 파일 선택창으로 올린다.** 서버 경로를 입력하던 창을 없애고 `POST /documents/upload`·`PUT /documents/{id}/upload`(base64)를 추가했다. 여러 파일을 고르면 파일명 속 회차 번호 순으로 들어간다. UTF-8이 아닌 텍스트는 400으로 안내한다.
 - **실제 OpenAI 호출 확인.** gpt-5.6-luna로 샘플 검증과 2회차 분석(검토 구간 4개)이 끝까지 돌아갔다. 그 과정에서 모델 목록이 30개에서 잘려 최신 세대가 빠지던 문제와, 근거 없는 엔티티 하나(`evidence: []`)가 검토 구간 전체를 실패시키던 문제를 고쳤다. `scripts/api_smoke.py`로 같은 확인을 반복할 수 있다.
@@ -40,7 +46,7 @@ $env:STORY_GUARD_DATA_DIR = "C:\storyguard-demo-data"
 
 ### 2026-09-14
 
-- 웹 모드 환경변수 추가: `STORY_GUARD_WEB_MODE`(데스크톱 전용 API 403·읽기 전용), `STORY_GUARD_WEB_WRITE_PATHS`, `STORY_GUARD_WEB_ORIGINS`(CORS), `STORY_GUARD_BIND_HOST`. 변수가 없으면 데스크톱 동작은 그대로다.
+- 웹 모드 환경변수 추가: `STORY_GUARD_WEB_MODE`(데스크톱 전용 API 403·읽기 전용), `STORY_GUARD_WEB_ORIGINS`(CORS), `STORY_GUARD_BIND_HOST`. 변수가 없으면 데스크톱 동작은 그대로다.
 - 브라우저 빌드는 `/shutdown`을 호출하지 않는다. 프론트 테스트가 실행 중인 로컬 백엔드를 종료시키던 문제를 고쳤다.
 - 제출 형태를 공개 웹 데모로 정리하고 `docs/web-demo-server.md`를 추가했다.
 
@@ -122,7 +128,7 @@ flowchart LR
 - 원고 본문, chunk, 엔티티, 관계, 이슈는 서버의 `STORY_GUARD_DATA_DIR`에 저장됩니다. 공개 데모는 미리 준비한 샘플 작품만 담습니다.
 - GPT 분석은 서버가 `OPENAI_API_KEY`로 호출합니다. 키는 서버 환경변수에만 두고 브라우저로 내려보내지 않습니다. 실행 전에 원문 전송 동의를 받습니다.
 - 웹 모드(`STORY_GUARD_WEB_MODE=1`)는 종료·로컬 모델 설치·ChatGPT 로그인·서버 경로 import를 403으로 막고, 샘플 데이터를 읽기 전용으로 제공합니다.
-- 공개 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리고, 접속당·하루 횟수 한도(`STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT`, `STORY_GUARD_WEB_GPT_RUNS_PER_DAY`)와 동시 요청 수(`STORY_GUARD_GPT_CONCURRENCY`)로 비용을 제한합니다. OpenAI 프로젝트의 지출 한도를 마지막 안전장치로 둡니다.
+- 공개 GPT 분석은 `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE=1`일 때만 열리고, 세션당·IP·서버 전체 일일 한도와 짧은 분석 범위, 동시 요청 수로 비용을 제한합니다. OpenAI 데모 프로젝트의 hard spend limit을 마지막 안전장치로 둡니다.
 - `STORY_GUARD_API_TOKEN`을 설정하면 `/health`를 제외한 API가 토큰을 요구합니다. 공개 데모에서는 비워 둡니다.
 
 주의: 로컬 개발에서는 백엔드가 `127.0.0.1`에만 바인딩됩니다. 서버에서만 `STORY_GUARD_BIND_HOST=0.0.0.0`을 씁니다.
@@ -172,7 +178,7 @@ npm run dev
 
 ## 데스크톱 앱
 
-Tauri 셸과 sidecar·DMG·Windows 릴리스 스크립트는 `main` 브랜치에 있습니다. 이 브랜치는 웹 데모 제출용이라 해당 파일을 제거했습니다.
+Tauri 셸과 sidecar·DMG·Windows 릴리스 스크립트는 `develop-jh` 브랜치에서 이어갑니다. 이 브랜치는 웹 데모 제출용이라 해당 파일을 제거했습니다.
 
 ## 테스트
 
