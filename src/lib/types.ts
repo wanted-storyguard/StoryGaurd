@@ -292,6 +292,20 @@ export interface ChatGptModel {
   efforts: { value: string; description: string }[];
 }
 
+export interface WebDemoQuota {
+  enabled: boolean;
+  limit: number;
+  used: number;
+  remaining: number;
+  ip_limit: number;
+  ip_remaining: number;
+  total_limit: number;
+  total_remaining: number;
+  resets_at: string;
+  max_chapters: number;
+  max_review_windows: number;
+}
+
 export interface ReviewHistory {
  id: number; title: string; description: string; status: IssueStatus;
  outcome: 'pending' | 'redetected' | 'not_redetected'; created_at: string;

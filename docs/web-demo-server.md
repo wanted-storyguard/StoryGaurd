@@ -9,11 +9,16 @@
 
 | 변수 | 값 | 설명 |
 |---|---|---|
-| `STORY_GUARD_WEB_MODE` | `1` | 공개 웹 데모 가드를 켠다. `/shutdown`, `/setup/*`, `/documents/import`, `/documents/replace`, `/health/local-ai`, `/chatgpt/login·logout·cancel·open-verification·check`는 403. 읽기(GET)만 허용하고 쓰기는 아래 허용 목록에 맞는 경로만 통과한다. `/chatgpt/status`·`/chatgpt/models`는 열려 있어 UI가 모델을 고를 수 있다. |
-| `STORY_GUARD_WEB_WRITE_PATHS` | 정규식 | 웹 모드에서 허용할 추가 쓰기 경로. 비어 있으면 읽기 전용. |
+| `STORY_GUARD_WEB_MODE` | `1` | 공개 웹 데모 가드를 켠다. 준비된 샘플 읽기와 제한된 GPT 분석/취소만 허용한다. 프로젝트·원고·설정·판단을 바꾸는 요청과 업로드는 항상 403이다. |
 | `STORY_GUARD_WEB_ALLOW_GPT_ANALYZE` | `1` | 공개 서버에서 `POST /projects/{id}/analyze/gpt`와 `analysis/cancel`을 연다. 기본은 닫힘. |
-| `STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT` | `3` | 접속(IP 또는 `X-Forwarded-For` 첫 값)당 하루 GPT 분석 실행 횟수. 초과 시 429. |
-| `STORY_GUARD_WEB_GPT_RUNS_PER_DAY` | `200` | 서버 전체 하루 GPT 분석 실행 횟수. 프로세스가 재시작되면 초기화되므로 OpenAI 프로젝트의 지출 한도를 마지막 안전장치로 둔다. |
+| `STORY_GUARD_WEB_GPT_RUNS_PER_SESSION` | `3` | 서명된 익명 브라우저 세션당 하루 분석 횟수. SQLite에 날짜와 함께 저장되어 서버 재시작 뒤에도 유지된다. |
+| `STORY_GUARD_WEB_GPT_RUNS_PER_IP` | `9` | 같은 IP의 세션 여러 개를 보조로 제한한다. 원본 IP는 저장하지 않고 해시만 저장한다. |
+| `STORY_GUARD_WEB_GPT_RUNS_PER_DAY` | `200` | 서버 전체 하루 분석 횟수. 세션·IP·전체 카운터를 한 SQLite 트랜잭션에서 올린다. |
+| `STORY_GUARD_WEB_MAX_CHAPTERS` | `2` | 한 번에 분석할 수 있는 최대 회차 수. |
+| `STORY_GUARD_WEB_MAX_REVIEW_WINDOWS` | `4` | 한 번에 GPT로 보낼 최대 검토 구간 수. 프론트가 더 큰 값을 보내도 서버에서 줄인다. |
+| `STORY_GUARD_WEB_QUOTA_TIMEZONE` | `Asia/Seoul` | 일일 한도 날짜와 리셋 시각의 기준 시간대. |
+| `STORY_GUARD_TRUST_PROXY_HEADERS` | `1` | 신뢰하는 리버스 프록시 뒤에서만 켠다. 첫 `X-Forwarded-For`를 IP 보조 한도에 사용하고 HTTPS 쿠키를 판별한다. |
+| `STORY_GUARD_WEB_COOKIE_SECURE` | `1` | HTTPS 배포에서 익명 세션 쿠키에 `Secure`와 `SameSite=None`을 강제한다. 프론트·API가 같은 사이트면 생략 가능하다. |
 | `OPENAI_API_KEY` | `sk-...` | 서버가 GPT를 호출할 키. 있으면 API 키 연결이 자동 선택된다(`STORY_GUARD_GPT_PROVIDER=openai_api`로 강제 가능, `chatgpt`로 데스크톱 로그인 강제). |
 | `STORY_GUARD_OPENAI_MODELS` | `gpt-5.6-luna,gpt-5.4-mini` | UI에 보여줄 모델을 이 순서로 고정한다. 비우면 `/models` 결과에서 채팅용 모델만 골라 보여준다. |
 | `STORY_GUARD_OPENAI_MAX_OUTPUT_TOKENS` | `12000` | 검토 응답의 출력 토큰 상한(추론 토큰 포함). 너무 작으면 JSON이 잘린다. |
@@ -22,7 +27,7 @@
 | `STORY_GUARD_WEB_ORIGINS` | `https://demo.example.com,https://...` | CORS 허용 origin. 데스크톱은 비워 두면 기존 loopback 정책만 유지된다. |
 | `STORY_GUARD_BIND_HOST` | `0.0.0.0` | 컨테이너·PaaS에서 외부 바인딩. 기본값은 `127.0.0.1`. |
 | `STORY_GUARD_BACKEND_PORT` | `8765` | 포트. PaaS가 주는 `PORT`를 그대로 넣는다. |
-| `STORY_GUARD_DATA_DIR` | `/data/story-guard` | SQLite·Chroma·모델 폴더. 미리 계산한 샘플 데이터 폴더를 이 위치에 둔다. |
+| `STORY_GUARD_DATA_DIR` | `/data/story-guard` | SQLite·Chroma·모델 폴더. 미리 계산한 샘플 데이터와 사용량 DB가 있으므로 영구 볼륨에 둔다. |
 | `STORY_GUARD_API_TOKEN` | (비움) | 공개 데모에서는 비운다. 브라우저에 비밀을 둘 수 없다. |
 
 ## 로컬에서 웹 모드 확인
@@ -33,6 +38,11 @@ $env:STORY_GUARD_WEB_ORIGINS = "http://localhost:5173"
 $env:STORY_GUARD_DATA_DIR = "C:\storyguard-demo-data"
 $env:OPENAI_API_KEY = "sk-..."
 $env:STORY_GUARD_WEB_ALLOW_GPT_ANALYZE = "1"
+$env:STORY_GUARD_WEB_GPT_RUNS_PER_SESSION = "3"
+$env:STORY_GUARD_WEB_GPT_RUNS_PER_IP = "9"
+$env:STORY_GUARD_WEB_GPT_RUNS_PER_DAY = "200"
+$env:STORY_GUARD_WEB_MAX_CHAPTERS = "2"
+$env:STORY_GUARD_WEB_MAX_REVIEW_WINDOWS = "4"
 .\.venv\Scripts\python.exe -m backend.app.main
 ```
 
@@ -46,12 +56,19 @@ $env:STORY_GUARD_WEB_ALLOW_GPT_ANALYZE = "1"
 - 돌리기 전에 시연할 규칙을 `POST /projects/{id}/settings`에 `certainty: confirmed`로 등록한다. 등록된 확정 설정은 모든 GPT 검토 구간에 자동으로 들어가므로, 1화 규칙과 7화 행동을 비교할 근거가 빠지지 않는다.
 - 서버에는 임베딩 모델이 없다. 라이브 검토는 미리 찾아둔 근거 + 사용자가 고친 장면을 GPT에 보내는 방식으로 설계한다.
 
-## 원고 올리기 (브라우저 파일 선택)
+## 공개 데모는 샘플 전용
 
-- 원고·설정 화면의 "여러 원고 가져오기"는 브라우저 파일 선택창을 연다. txt·md·docx를 여러 개 고르면 파일명 속 회차 번호 순서로 올라간다. 수정본 교체도 같은 방식이다.
-- 브라우저는 파일 내용을 base64로 `POST /documents/upload`(`project_id`, `filename`, `content_base64`)와 `PUT /documents/{id}/upload`에 보낸다. 서버는 파일을 `STORY_GUARD_DATA_DIR/uploads/{project_id}/`에 저장한 뒤 경로 import와 같은 흐름(청킹·색인 예약)을 탄다. 5MB 초과는 413, 지원하지 않는 확장자·깨진 base64·UTF-8이 아닌 텍스트는 400이다.
-- 예전 `POST /documents/import`(서버 경로)는 스크립트용으로 남아 있다.
-- 웹 모드에서는 두 업로드 경로 모두 쓰기라서 기본적으로 403이다. 방문자 업로드를 열려면 `STORY_GUARD_WEB_WRITE_PATHS`에 `/documents/upload`를 넣되, 공유 DB에 쌓이는 점을 감안한다.
+- 웹 모드에서는 파일 업로드·교체·삭제, 프로젝트 생성·변경, 설정 메모와 판단 저장을 항상 닫는다. 예전 `STORY_GUARD_WEB_WRITE_PATHS` 값이 남아 있어도 다시 열리지 않는다.
+- 화면에서도 해당 버튼과 입력 폼을 숨기고 `준비된 샘플 · 읽기 전용`으로 표시한다.
+- 샘플 추가·교체는 공개 서버를 웹 모드로 띄우기 전에 로컬 개발 모드에서 작업한 뒤 `STORY_GUARD_DATA_DIR`의 영구 볼륨을 갱신한다.
+
+## OpenAI 예산·팀 공유 체크리스트
+
+1. 개인 기본 프로젝트와 분리된 **StoryGuard Demo 전용 OpenAI 프로젝트**를 만든다.
+2. 데모 프로젝트의 hard spend limit을 `$50` 크레딧 전체보다 충분히 작게 설정하고 사용량 알림도 함께 둔다.
+3. 프로젝트 전용 API 키는 배포 서비스의 Secret/Environment에만 `OPENAI_API_KEY`로 저장한다. Git, `.env` 커밋, 메신저, 프론트의 `VITE_*` 변수에는 넣지 않는다.
+4. 팀원은 배포 서비스의 권한으로 환경변수를 관리하거나 OpenAI 프로젝트 멤버로 초대한다. 같은 키 문자열을 복사해 공유하지 않는다.
+5. 키가 노출됐다고 의심되면 즉시 폐기하고 새 프로젝트 키로 교체한다.
 
 ## 테스트 방법
 

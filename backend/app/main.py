@@ -62,11 +62,18 @@ from backend.app.services.local_ai import (
 from backend.app.services.local_llm import LocalLlmExtractor
 from backend.app.services.parser import SUPPORTED_FORMATS, UnsupportedDocumentFormat, read_document, split_chunks
 from backend.app.services.rag import RagService
+from backend.app.services.web_demo_quota import (
+    COOKIE_NAME,
+    QuotaExceeded,
+    QuotaLimits,
+    WebDemoQuotaStore,
+)
 
 
 database = Database(database_path())
 repository = StoryRepository(database)
 local_ai = LocalAiRuntime(models_path())
+web_demo_quota = WebDemoQuotaStore(database)
 
 
 def save_environment_settings(embedding_model: str, generation_model: str) -> None:
@@ -146,68 +153,39 @@ def _env_int(name: str, default: int) -> int:
     return int(raw) if raw.isdigit() else default
 
 
-class DailyRequestMeter:
-    """Per-day request counts, overall and per client, kept in memory.
-
-    Good enough for a short public demo: the process restart resets it and a
-    hard spend limit on the OpenAI project remains the backstop.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self.reset()
-
-    def reset(self) -> None:
-        self._day = time.strftime("%Y-%m-%d")
-        self._total = 0
-        self._by_client: dict[str, int] = defaultdict(int)
-
-    def take(self, client: str, per_client_limit: int, daily_limit: int) -> str | None:
-        """Consume one request; return a refusal message or None when allowed."""
-        with self._lock:
-            today = time.strftime("%Y-%m-%d")
-            if today != self._day:
-                self.reset()
-            if self._total >= daily_limit:
-                return "오늘 공개 데모의 GPT 분석 한도에 도달했습니다. 내일 다시 시도해 주세요."
-            if self._by_client[client] >= per_client_limit:
-                return "이 접속에서 실행할 수 있는 GPT 분석 횟수를 모두 사용했습니다."
-            self._total += 1
-            self._by_client[client] += 1
-            return None
-
-
-web_gpt_meter = DailyRequestMeter()
-
-
 def request_client_id(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    if os.getenv("STORY_GUARD_TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
     return request.client.host if request.client else "unknown"
+
+
+def web_demo_quota_limits() -> QuotaLimits:
+    return QuotaLimits(
+        session=_env_int(
+            "STORY_GUARD_WEB_GPT_RUNS_PER_SESSION",
+            _env_int("STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT", 3),
+        ),
+        ip=_env_int("STORY_GUARD_WEB_GPT_RUNS_PER_IP", 9),
+        total=_env_int("STORY_GUARD_WEB_GPT_RUNS_PER_DAY", 200),
+        timezone_name=os.getenv("STORY_GUARD_WEB_QUOTA_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul",
+        max_chapters=max(1, _env_int("STORY_GUARD_WEB_MAX_CHAPTERS", 2)),
+        max_review_windows=max(1, _env_int("STORY_GUARD_WEB_MAX_REVIEW_WINDOWS", 4)),
+    )
 
 
 def web_mode_allows(method: str, path: str) -> bool:
     """Decide whether a request may pass the public web demo guard.
 
-    Reads are allowed except for desktop-only prefixes.  Writes are denied
-    unless the path matches ``STORY_GUARD_WEB_WRITE_PATHS`` (a regular
-    expression), which the demo's own rate-limited endpoints will use.
+    Reads are allowed except for desktop-only prefixes. Writes are denied;
+    the public GPT endpoint is handled separately by the middleware.
     """
     if method == "OPTIONS":
         return True
     if any(path == prefix or path.startswith(prefix + "/") or path.startswith(prefix) for prefix in WEB_MODE_BLOCKED_PREFIXES):
         return False
-    if method in WEB_MODE_READ_METHODS:
-        return True
-    pattern = os.getenv("STORY_GUARD_WEB_WRITE_PATHS", "").strip()
-    if not pattern:
-        return False
-    try:
-        return re.fullmatch(pattern, path) is not None
-    except re.error:
-        logging.getLogger(__name__).error("STORY_GUARD_WEB_WRITE_PATHS 정규식이 잘못되었습니다: %r", pattern)
-        return False
+    return method in WEB_MODE_READ_METHODS
 
 
 app = FastAPI(title="Story Guard API", version="0.1.0")
@@ -294,28 +272,49 @@ async def require_local_api_token(request: Request, call_next):
 
 @app.middleware("http")
 async def public_web_demo_guard(request: Request, call_next):
-    if web_mode_enabled():
-        path = request.url.path
-        if request.method == "POST" and WEB_GPT_ANALYZE_PATH.match(path):
-            if not web_gpt_analyze_enabled():
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "공개 웹 데모에서는 GPT 분석을 열어 두지 않았습니다. 미리 분석된 결과를 확인해 주세요."},
-                )
-            if path.endswith("/analyze/gpt"):
-                refusal = web_gpt_meter.take(
-                    request_client_id(request),
-                    _env_int("STORY_GUARD_WEB_GPT_RUNS_PER_CLIENT", 3),
-                    _env_int("STORY_GUARD_WEB_GPT_RUNS_PER_DAY", 200),
-                )
-                if refusal:
-                    return JSONResponse(status_code=429, content={"detail": refusal})
-        elif not web_mode_allows(request.method, path):
-            return JSONResponse(
+    if not web_mode_enabled():
+        return await call_next(request)
+
+    session_id, cookie_value, set_cookie = web_demo_quota.resolve_session(
+        request.cookies.get(COOKIE_NAME)
+    )
+    request.state.web_demo_session_id = session_id
+    request.state.web_demo_client_ip = request_client_id(request)
+    path = request.url.path
+
+    if request.method == "POST" and WEB_GPT_ANALYZE_PATH.match(path):
+        if not web_gpt_analyze_enabled():
+            response = JSONResponse(
                 status_code=403,
-                content={"detail": "공개 웹 데모에서는 사용할 수 없는 기능입니다. 데스크톱 앱에서 제공합니다."},
+                content={"detail": "공개 웹 데모에서는 GPT 분석을 열어 두지 않았습니다. 미리 분석된 결과를 확인해 주세요."},
             )
-    return await call_next(request)
+        else:
+            response = await call_next(request)
+    elif not web_mode_allows(request.method, path):
+        response = JSONResponse(
+            status_code=403,
+            content={"detail": "공개 웹 데모는 준비된 샘플만 읽을 수 있습니다. 편집과 업로드는 데스크톱 앱에서 제공합니다."},
+        )
+    else:
+        response = await call_next(request)
+
+    if set_cookie:
+        forwarded_https = (
+            os.getenv("STORY_GUARD_TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
+            and request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower() == "https"
+        )
+        force_secure = os.getenv("STORY_GUARD_WEB_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes"}
+        secure = force_secure or request.url.scheme == "https" or forwarded_https
+        response.set_cookie(
+            COOKIE_NAME,
+            cookie_value,
+            max_age=60 * 60 * 24 * 30,
+            httponly=True,
+            secure=secure,
+            samesite="none" if secure else "lax",
+            path="/",
+        )
+    return response
 
 
 @app.get("/health")
@@ -326,6 +325,30 @@ def health() -> dict[str, str]:
 @app.get("/health/ready")
 def authenticated_health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/web-demo/quota")
+def web_demo_quota_status(request: Request) -> dict[str, bool | int | str]:
+    limits = web_demo_quota_limits()
+    if not web_mode_enabled():
+        return {
+            "enabled": False,
+            "limit": limits.session,
+            "used": 0,
+            "remaining": limits.session,
+            "ip_limit": limits.ip,
+            "ip_remaining": limits.ip,
+            "total_limit": limits.total,
+            "total_remaining": limits.total,
+            "resets_at": "",
+            "max_chapters": limits.max_chapters,
+            "max_review_windows": limits.max_review_windows,
+        }
+    return web_demo_quota.status(
+        request.state.web_demo_session_id,
+        request.state.web_demo_client_ip,
+        limits,
+    ).to_dict()
 
 
 @app.post("/shutdown")
@@ -638,16 +661,46 @@ def analyze_project(project_id: int) -> dict[str, int]:
 
 
 @app.post("/projects/{project_id}/analyze/gpt")
-def analyze_project_gpt(project_id: int, payload: ManuscriptAnalysisRequest):
+def analyze_project_gpt(project_id: int, payload: ManuscriptAnalysisRequest, request: Request):
     if not payload.consent:
         raise HTTPException(status_code=400, detail="원문 전송 동의가 필요합니다.")
+    batch_limit = payload.batch_limit
+    if web_mode_enabled():
+        limits = web_demo_quota_limits()
+        if payload.start_chapter is not None and payload.end_chapter is not None and payload.start_chapter > payload.end_chapter:
+            raise HTTPException(status_code=422, detail="분석 회차 범위가 올바르지 않습니다.")
+        documents = repository.list_documents(project_id)
+        selected_documents = [
+            document for document in documents
+            if (payload.start_chapter is None or document.chapter_index >= payload.start_chapter)
+            and (payload.end_chapter is None or document.chapter_index <= payload.end_chapter)
+        ]
+        if not selected_documents:
+            raise HTTPException(status_code=409, detail="선택한 범위에 분석할 샘플 원고가 없습니다.")
+        if len(selected_documents) > limits.max_chapters:
+            raise HTTPException(
+                status_code=422,
+                detail=f"웹 데모는 한 번에 최대 {limits.max_chapters}개 회차만 분석할 수 있습니다. 범위를 더 짧게 선택해 주세요.",
+            )
+        batch_limit = min(payload.batch_limit or limits.max_review_windows, limits.max_review_windows)
+        try:
+            web_demo_quota.take(
+                request.state.web_demo_session_id,
+                request.state.web_demo_client_ip,
+                limits,
+            )
+        except QuotaExceeded as error:
+            raise HTTPException(status_code=429, detail=str(error)) from error
     settings = get_settings()
     analyzer = GptStoryAnalyzer(repository,
         RagService(chroma_path(), embedding_model=settings.embedding_model, repository=repository), chatgpt_connection)
     try:
-        return analyzer.analyze(project_id, payload.model, payload.effort, force=payload.force,
-                                batch_limit=payload.batch_limit,
-                                start_chapter=payload.start_chapter, end_chapter=payload.end_chapter)
+        result = analyzer.analyze(project_id, payload.model, payload.effort, force=payload.force,
+                                  batch_limit=batch_limit,
+                                  start_chapter=payload.start_chapter, end_chapter=payload.end_chapter)
+        if web_mode_enabled():
+            result["demo_limited"] = True
+        return result
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 

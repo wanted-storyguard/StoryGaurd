@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import type { ChatGptModel, ChatGptStatus } from "../lib/types";
+import type { ChatGptModel, ChatGptStatus, WebDemoQuota } from "../lib/types";
 
 export function estimateReviewWindows(documentCharCounts: number[], manuscriptChars: number): number {
   return Math.max(1, documentCharCounts.length
@@ -24,6 +24,15 @@ export function formatDurationRange(minSeconds: number, maxSeconds: number) {
 export function formatMemoryGigabytes(megabytes: number) {
   if (!Number.isFinite(megabytes) || megabytes <= 0) return "확인 필요";
   return `${(megabytes / 1000).toFixed(2)}GB`;
+}
+
+export function WebDemoQuotaNotice({ quota }: { quota: WebDemoQuota | null }) {
+  if (!quota?.enabled) return null;
+  const remaining = Math.min(quota.remaining, quota.ip_remaining, quota.total_remaining);
+  return <aside className="demo-quota" role="status">
+    <strong>오늘 남은 분석 {remaining}/{quota.limit}회</strong>
+    <span>준비된 샘플만 사용할 수 있으며, 한 번에 최대 {quota.max_chapters}개 회차·{quota.max_review_windows}개 검토 구간을 분석합니다.</span>
+  </aside>;
 }
 
 export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, documentCount = 0, manuscriptChars = 0, documentCharCounts = [], analyzing = false, onAnalyze, showAnalysis = true, compact = false, chapters = [], analysisRange = { startChapter: null, endChapter: null }, onAnalysisRangeChange }: {
@@ -51,11 +60,35 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
   const [result, setResult] = useState("");
   const [reuseResults, setReuseResults] = useState(true);
   const [manuscriptConsent, setManuscriptConsent] = useState(false);
+  const [demoQuota, setDemoQuota] = useState<WebDemoQuota | null>(null);
   const [serverEstimate, setServerEstimate] = useState<{ documentCount: number; manuscriptChars: number; reviewWindows: number; embeddingModel?: string; embeddingEstimateSeconds?: number; embeddingMemoryEstimateMb?: number; gptEstimateSeconds?: number; gptEstimateMinSeconds?: number; gptEstimateMaxSeconds?: number; mode?: string; batchSize?: number; batchCount?: number; planMessage?: string } | null>(null);
   const estimatedReviewWindows = serverEstimate?.reviewWindows ?? estimateReviewWindows(documentCharCounts, manuscriptChars);
   const estimatedDocumentCount = serverEstimate?.documentCount ?? documentCount;
   const estimatedManuscriptChars = serverEstimate?.manuscriptChars ?? manuscriptChars;
+  const refreshDemoQuota = useCallback(async () => {
+    const value = await api.webDemoQuota();
+    setDemoQuota(value);
+    return value;
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    api.webDemoQuota().then(value => { if (!disposed) setDemoQuota(value); }).catch(() => { /* desktop startup remains unchanged */ });
+    return () => { disposed = true; };
+  }, []);
   useEffect(() => { setManuscriptConsent(false); }, [projectId]);
+  useEffect(() => {
+    if (!demoQuota?.enabled || chapters.length <= demoQuota.max_chapters || !onAnalysisRangeChange) return;
+    const selected = chapters.filter(chapter =>
+      (analysisRange.startChapter === null || chapter.chapterIndex >= analysisRange.startChapter)
+      && (analysisRange.endChapter === null || chapter.chapterIndex <= analysisRange.endChapter));
+    if (analysisRange.startChapter !== null && analysisRange.endChapter !== null && selected.length <= demoQuota.max_chapters) return;
+    const startPosition = Math.max(0, chapters.findIndex(chapter => chapter.chapterIndex === analysisRange.startChapter));
+    const endPosition = Math.min(chapters.length - 1, startPosition + demoQuota.max_chapters - 1);
+    onAnalysisRangeChange({
+      startChapter: chapters[startPosition].chapterIndex,
+      endChapter: chapters[endPosition].chapterIndex,
+    });
+  }, [demoQuota?.enabled, demoQuota?.max_chapters, chapters, analysisRange.startChapter, analysisRange.endChapter, onAnalysisRangeChange]);
   useEffect(() => {
     let disposed = false;
     setServerEstimate(null);
@@ -72,13 +105,25 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
 
   function updateRange(startValue: string, endValue: string) {
     if (startValue === "all" || endValue === "all") {
-      onAnalysisRangeChange?.({ startChapter: null, endChapter: null });
+      if (demoQuota?.enabled && chapters.length > demoQuota.max_chapters) {
+        const first = chapters[0]?.chapterIndex ?? 0;
+        const last = chapters[Math.min(chapters.length - 1, demoQuota.max_chapters - 1)]?.chapterIndex ?? first;
+        onAnalysisRangeChange?.({ startChapter: first, endChapter: last });
+      } else {
+        onAnalysisRangeChange?.({ startChapter: null, endChapter: null });
+      }
       return;
     }
     const start = startValue === "all" ? null : Number(startValue);
     const end = endValue === "all" ? null : Number(endValue);
     if (start !== null && end !== null && start > end) {
       onAnalysisRangeChange?.({ startChapter: start, endChapter: start });
+      return;
+    }
+    if (demoQuota?.enabled && start !== null && end !== null) {
+      const startPosition = chapters.findIndex(chapter => chapter.chapterIndex === start);
+      const allowedEnd = chapters[Math.min(chapters.length - 1, Math.max(0, startPosition) + demoQuota.max_chapters - 1)]?.chapterIndex ?? start;
+      onAnalysisRangeChange?.({ startChapter: start, endChapter: Math.min(end, allowedEnd) });
       return;
     }
     onAnalysisRangeChange?.({ startChapter: start, endChapter: end });
@@ -169,6 +214,9 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
 
   const apiKeyMode = status?.method === "api_key";
   const usageOwner = apiKeyMode ? "서버에 설정된 OpenAI API 키의 사용량" : "내 계정의 사용 한도";
+  const demoRemaining = demoQuota?.enabled
+    ? Math.min(demoQuota.remaining, demoQuota.ip_remaining, demoQuota.total_remaining)
+    : null;
   return <section className={`setup-panel chatgpt-panel${compact ? " chatgpt-panel-compact" : ""}`} aria-label={apiKeyMode ? "OpenAI API 연결" : "ChatGPT 계정 연결"}>
     <div className="setup-heading">
       <div><span className="label">{apiKeyMode ? "OpenAI API 키 · 서버 연결" : "ChatGPT 계정 · Codex 연결"}</span>
@@ -202,16 +250,17 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
       {showAnalysis && <div>
         <strong>{projectTitle ? `분석할 작품 · ${projectTitle}` : "작품을 먼저 선택해 주세요"}</strong>
         <p>현재 GPT 분석은 <strong>{rangeLabel}</strong>을 검토합니다. 원고 구간마다 관련 근거를 검색해 OpenAI로 전송합니다. 원고가 길수록 요청 횟수와 계정 사용량이 늘어납니다. 결과는 작가가 검토할 후보입니다.</p>
+        <WebDemoQuotaNotice quota={demoQuota} />
         {hasDocuments && <>
           {chapters.length > 1 && <div className="analysis-range-picker" role="group" aria-label="GPT 분석 회차 범위">
             <span className="analysis-range-label">분석 회차</span>
             <label>시작 <select aria-label="분석 시작 회차" value={analysisRange.startChapter ?? "all"} disabled={busy || analyzing} onChange={event => updateRange(event.target.value, analysisRange.endChapter === null ? event.target.value : String(analysisRange.endChapter))}>
-              <option value="all">전체</option>
+              {!demoQuota?.enabled || chapters.length <= demoQuota.max_chapters ? <option value="all">전체</option> : null}
               {chapters.map(chapter => <option key={chapter.chapterIndex} value={chapter.chapterIndex}>{chapter.chapterIndex + 1}화 · {chapter.title}</option>)}
             </select></label>
             <span aria-hidden="true">→</span>
             <label>끝 <select aria-label="분석 종료 회차" value={analysisRange.endChapter ?? "all"} disabled={busy || analyzing} onChange={event => updateRange(analysisRange.startChapter === null ? event.target.value : String(analysisRange.startChapter), event.target.value)}>
-              <option value="all">전체</option>
+              {!demoQuota?.enabled || chapters.length <= demoQuota.max_chapters ? <option value="all">전체</option> : null}
               {chapters.map(chapter => <option key={chapter.chapterIndex} value={chapter.chapterIndex}>{chapter.chapterIndex + 1}화</option>)}
             </select></label>
             <small>긴 원고는 범위를 나눠 분석하면 실패 구간을 격리하고 완료된 결과를 보존할 수 있습니다.</small>
@@ -225,9 +274,12 @@ export function ChatGptPanel({ projectId, projectTitle, hasDocuments = false, do
         </>}
         <label><input type="checkbox" checked={manuscriptConsent} disabled={busy || analyzing || !hasDocuments} onChange={e => setManuscriptConsent(e.target.checked)} /> 선택한 작품의 원문을 OpenAI에 전송하고 {usageOwner}을 사용하는 데 동의합니다.</label>
         <label><input type="checkbox" checked={reuseResults} disabled={busy || analyzing} onChange={e => setReuseResults(e.target.checked)} /> 동일한 원문·검색 근거·모델·추론 강도의 검증된 결과 재사용 (추가 GPT 요청 절약)</label>
-        <button disabled={busy || analyzing || !model || !hasDocuments || !manuscriptConsent || !onAnalyze} onClick={() => act(async () => { await onAnalyze?.(model, selectedEffort || undefined, !reuseResults, analysisRange); })}>{analyzing ? "작품 분석 중…" : "이 작품 GPT 분석"}</button>
+        <button disabled={busy || analyzing || !model || !hasDocuments || !manuscriptConsent || !onAnalyze || demoRemaining === 0} onClick={() => act(async () => {
+          try { await onAnalyze?.(model, selectedEffort || undefined, !reuseResults, analysisRange); }
+          finally { await refreshDemoQuota().catch(() => undefined); }
+        })}>{analyzing ? "작품 분석 중…" : demoRemaining === 0 ? "오늘 분석 횟수 소진" : "이 작품 GPT 분석"}</button>
       </div>}
-      {showAnalysis && !compact && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 {usageOwner}을 사용하는 데 동의합니다.</label>
+      {showAnalysis && !compact && !demoQuota?.enabled && <><label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} /> 가상 원고 4문장을 OpenAI에 전송하고 {usageOwner}을 사용하는 데 동의합니다.</label>
       <button disabled={busy || !model || !consent} onClick={() => act(async () => { setResult(""); setResult((await api.chatGptCheck(model, selectedEffort || undefined)).text); })}>{busy ? "확인 중…" : "샘플로 연결 검증"}</button></>}
     </div>}
     {(error || status?.error) && <p role="alert">{error || status?.error}</p>}

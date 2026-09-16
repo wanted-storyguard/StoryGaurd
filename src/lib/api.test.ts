@@ -17,6 +17,7 @@ describe("api client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8765/health",
       expect.objectContaining({
+        credentials: "include",
         headers: expect.not.objectContaining({ "Content-Type": "application/json" }),
       }),
     );

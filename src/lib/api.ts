@@ -15,6 +15,7 @@ import type {
   StoryDocument,
   StorySetting,
   ForeshadowingStatus,
+  WebDemoQuota,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_STORY_GUARD_API ?? "http://127.0.0.1:8765";
@@ -51,7 +52,12 @@ async function request<T>(path: string, init?: RequestInit, readPolicy = { attem
     const timer = readOnly ? setTimeout(() => { timedOut = true; controller.abort(); }, readPolicy.timeoutMs) : undefined;
     let failure: ApiRequestError;
     try {
-      const response = await fetch(`${API_BASE}${path}`, { ...init, headers, signal: controller.signal });
+      const response = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        credentials: "include",
+        headers,
+        signal: controller.signal,
+      });
       if (!response.ok) {
         const body = await response.json().catch(() => ({ detail: response.statusText }));
         throw new ApiRequestError(body.detail ?? response.statusText, path, method, attempt, 'http', response.status);
@@ -90,6 +96,7 @@ export const api = {
   }),
   health: () => request<{ status: string }>("/health"),
   ready: () => request<{ status: string }>("/health/ready", undefined, { attempts: 1, timeoutMs: 2_000 }),
+  webDemoQuota: () => request<WebDemoQuota>("/web-demo/quota"),
   settings: () => request<AppSettings>("/settings"),
   updateSettings: (settings: AppSettings) =>
     request<AppSettings>("/settings", {
@@ -155,7 +162,7 @@ export const api = {
     ),
   analyzeProjectGpt: (projectId: number, model: string, effort?: string, force = false, batchLimit?: number,
     range?: { startChapter?: number | null; endChapter?: number | null }) =>
-    request<{ entity_count: number; relation_count: number; issue_count: number; request_count?: number; cached_count?: number; failed_window_count?: number; batch_limited?: boolean; failed_windows?: Array<{ index: number; chunk_id: number; error: string; error_code?: string | null; stage?: string; attempts?: number; elapsed_seconds?: number }> }>(
+    request<{ entity_count: number; relation_count: number; issue_count: number; request_count?: number; cached_count?: number; failed_window_count?: number; batch_limited?: boolean; demo_limited?: boolean; failed_windows?: Array<{ index: number; chunk_id: number; error: string; error_code?: string | null; stage?: string; attempts?: number; elapsed_seconds?: number }> }>(
       `/projects/${projectId}/analyze/gpt`,
       { method: "POST", body: JSON.stringify({ model, effort, consent: true, force, batch_limit: batchLimit,
         ...(range?.startChapter !== null && range?.startChapter !== undefined ? { start_chapter: range.startChapter } : {}),
